@@ -419,7 +419,7 @@ export default function App() {
                       <img src={LOGO_SRC} alt="CHOK'BÉTON" style={{ height: 72, width: "auto", objectFit: "contain", flexShrink: 0 }} />
                       <div style={{ paddingTop: 6, borderLeft: "2px solid #F0F0F0", paddingLeft: 16 }}>
                         <div style={{ fontSize: 9, color: "#999", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>Contact</div>
-                        <div style={{ fontSize: 10, color: "#444", lineHeight: 1.8 }}>{SOCIETE.adresse}, {SOCIETE.cp_ville}<br />Tél. {SOCIETE.tel} · M. {SOCIETE.mobile}<br />{SOCIETE.web}</div>
+                        <div style={{ fontSize: 10, color: "#444", lineHeight: 1.8 }}>{SOCIETE.adresse}, {SOCIETE.cp_ville}<br />Tél. {SOCIETE.tel}<br />{SOCIETE.web}</div>
                       </div>
                     </div>
                     <div style={{ textAlign: "right" }}>
@@ -511,7 +511,7 @@ export default function App() {
 
                   {/* Signatures */}
                   <div style={{ display: "flex", gap: 20, marginBottom: 16 }}>
-                    {[["Bon pour accord — Signature client", "Date :"], ["CHOK'BÉTON — Christopher Dupré", "Directeur"]].map(([t, s]) => (
+                    {[["Bon pour accord — Signature client", "Date :"], ["CHOK'BÉTON — Christopher Dupré", "christopher@chok-beton.fr  ·  06 24 26 21 05"]].map(([t, s]) => (
                       <div key={t} style={{ flex: 1, border: "1px solid #E0E0E0", borderRadius: 4, padding: "10px 14px" }}>
                         <div style={{ fontSize: 9, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>{t}</div>
                         <div style={{ fontSize: 9, color: "#AAA", marginBottom: 6 }}>{s}</div>
