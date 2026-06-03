@@ -53,7 +53,7 @@ function nouveauDevis() {
     numero: genererNumero(),
     date: new Date().toISOString().split("T")[0],
     validite: 30, client: "", chantier: "", contact: "", objet: "",
-    lignes: [], a_votre_charge: "", tva: 20,
+    lignes: [], a_votre_charge: "* Traçage précis des carottages\n* Fourniture de l'électricité 220 V mono 16 A à 20 m\n* Fourniture de l'eau avec un robinet à 20 m\n* Bennes à gravats\n* Toutes les protections collectives\n* Tous les travaux de maçonneries\n* Installation des moyens d'accès sur la terrasse", tva: 20,
     notes_bas: "Devis valable 30 jours. Paiement à 45 jours fin de mois.",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   };
