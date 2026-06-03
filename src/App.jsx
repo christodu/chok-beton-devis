@@ -53,7 +53,7 @@ function nouveauDevis() {
     numero: genererNumero(),
     date: new Date().toISOString().split("T")[0],
     validite: 30, client: "", chantier: "", contact: "", objet: "",
-    lignes: [], a_votre_charge: "* Traçage précis des carottages\n* Fourniture de l'électricité 220 V mono 16 A à 20 m\n* Fourniture de l'eau avec un robinet à 20 m\n* Bennes à gravats\n* Toutes les protections collectives\n* Tous les travaux de maçonneries\n* Installation des moyens d'accès sur la terrasse", tva: 20,
+    lignes: [], sans_tva: false, a_votre_charge: "* Traçage précis des carottages\n* Fourniture de l'électricité 220 V mono 16 A à 20 m\n* Fourniture de l'eau avec un robinet à 20 m\n* Bennes à gravats\n* Toutes les protections collectives\n* Tous les travaux de maçonneries\n* Installation des moyens d'accès sur la terrasse", tva: 20,
     notes_bas: "Devis valable 30 jours. Paiement à 45 jours fin de mois.",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   };
@@ -361,13 +361,24 @@ export default function App() {
             <div style={card}>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                 <TotalRow label="Total HT" value={totalHT} />
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ color: "#666", fontSize: 13 }}>TVA</span>
-                  <input type="number" value={devis.tva} onChange={e => setDevis(d => ({ ...d, tva: parseFloat(e.target.value) || 0 }))} style={{ ...inp, width: 60, textAlign: "center" }} />
-                  <span style={{ color: "#666", fontSize: 13 }}>%</span>
-                  <span style={{ color: "#555", fontSize: 14, minWidth: 120, textAlign: "right" }}>{totalTVA.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €</span>
+                {/* Toggle TVA */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: "#555" }}>
+                    <input type="checkbox" checked={devis.sans_tva} onChange={e => setDevis(d => ({ ...d, sans_tva: e.target.checked }))} style={{ width: 16, height: 16, accentColor: "#E8A838", cursor: "pointer" }} />
+                    Sans TVA
+                  </label>
+                  {!devis.sans_tva && (
+                    <>
+                      <span style={{ color: "#666", fontSize: 13 }}>TVA</span>
+                      <input type="number" value={devis.tva} onChange={e => setDevis(d => ({ ...d, tva: parseFloat(e.target.value) || 0 }))} style={{ ...inp, width: 60, textAlign: "center" }} />
+                      <span style={{ color: "#666", fontSize: 13 }}>%</span>
+                      <span style={{ color: "#555", fontSize: 14, minWidth: 120, textAlign: "right" }}>{totalTVA.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €</span>
+                    </>
+                  )}
                 </div>
-                <div style={{ borderTop: "1px solid #EEE", paddingTop: 8, marginTop: 4, width: "100%" }}><TotalRow label="TOTAL TTC" value={totalTTC} highlight /></div>
+                <div style={{ borderTop: "1px solid #EEE", paddingTop: 8, marginTop: 4, width: "100%" }}>
+                  <TotalRow label={devis.sans_tva ? "TOTAL HT" : "TOTAL TTC"} value={devis.sans_tva ? totalHT : totalTTC} highlight />
+                </div>
               </div>
               <div style={{ marginTop: 16 }}>
                 <label style={lbl}>Notes / Conditions</label>
@@ -485,8 +496,13 @@ export default function App() {
                   <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
                     <div style={{ width: 260 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 10px", borderTop: "1px solid #E8E8E8" }}><span style={{ fontSize: 10, color: "#666" }}>Total HT</span><span style={{ fontSize: 10, fontWeight: 600 }}>{totalHT.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €</span></div>
-                      <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 10px", borderTop: "1px solid #E8E8E8" }}><span style={{ fontSize: 10, color: "#666" }}>TVA {devis.tva}%</span><span style={{ fontSize: 10, fontWeight: 600 }}>{totalTVA.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €</span></div>
-                      <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", background: "#1A1A1A", borderRadius: 4, marginTop: 4 }}><span style={{ fontSize: 11, fontWeight: 700, color: "#E8A838" }}>TOTAL TTC</span><span style={{ fontSize: 13, fontWeight: 800, color: "#E8A838" }}>{totalTTC.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €</span></div>
+                      {!devis.sans_tva && (
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 10px", borderTop: "1px solid #E8E8E8" }}><span style={{ fontSize: 10, color: "#666" }}>TVA {devis.tva}%</span><span style={{ fontSize: 10, fontWeight: 600 }}>{totalTVA.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €</span></div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", background: "#1A1A1A", borderRadius: 4, marginTop: 4 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#E8A838" }}>{devis.sans_tva ? "TOTAL HT" : "TOTAL TTC"}</span>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: "#E8A838" }}>{(devis.sans_tva ? totalHT : totalTTC).toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €</span>
+                      </div>
                     </div>
                   </div>
 
