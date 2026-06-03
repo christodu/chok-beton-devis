@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
-import { supabase } from "./supabase";
+
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
 const UNITES = ["cml", "ml", "m²", "U", "Forfait", "Ens"];
@@ -101,46 +101,38 @@ function nouveauDoc(type = "devis", base = null) {
   };
 }
 
-// ─── SUPABASE CRUD ────────────────────────────────────────────────────────────
+// ─── SUPABASE REST API (sans auth) ────────────────────────────────────────────
+const SB_URL = "https://vafdxhneykqervstkkew.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhZmR4aG5leWtxZXJ2c3Rra2N3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDgxODQsImV4cCI6MjA5NjA4NDE4NH0.Y-p9a22T94SMo4IfRjeV0CyeiNxmw5fTu1LNPzZkJho";
+const SB_HEADERS = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Prefer": "return=minimal" };
+
 async function fetchDocs() {
-  const { data, error } = await supabase
-    .from("documents")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data || [];
+  const r = await fetch(`${SB_URL}/rest/v1/documents?order=created_at.desc`, { headers: { ...SB_HEADERS, "Prefer": "return=representation" } });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
 }
 
-async function upsertDoc(doc, userId) {
+async function upsertDoc(doc) {
   const payload = {
-    id: doc.id,
-    user_id: userId,
-    type_doc: doc.type_doc,
-    numero: doc.numero,
-    date: doc.date,
-    validite: doc.validite,
-    client: doc.client,
-    chantier: doc.chantier,
-    contact: doc.contact,
-    email_client: doc.email_client || "",
-    objet: doc.objet,
-    lignes: doc.lignes,
-    sans_tva: doc.sans_tva,
-    tva: doc.tva,
-    statut: doc.statut,
-    date_envoi: doc.date_envoi || null,
-    a_votre_charge: doc.a_votre_charge,
-    notes_bas: doc.notes_bas,
-    devis_origine: doc.devis_origine || null,
-    numero_situation: doc.numero_situation || null,
+    id: doc.id, user_id: "00000000-0000-0000-0000-000000000000",
+    type_doc: doc.type_doc, numero: doc.numero, date: doc.date,
+    validite: doc.validite, client: doc.client, chantier: doc.chantier,
+    contact: doc.contact, email_client: doc.email_client || "",
+    objet: doc.objet, lignes: doc.lignes, sans_tva: doc.sans_tva,
+    tva: doc.tva, statut: doc.statut, date_envoi: doc.date_envoi || null,
+    a_votre_charge: doc.a_votre_charge, notes_bas: doc.notes_bas,
+    devis_origine: doc.devis_origine || null, numero_situation: doc.numero_situation || null,
   };
-  const { error } = await supabase.from("documents").upsert(payload);
-  if (error) throw error;
+  const r = await fetch(`${SB_URL}/rest/v1/documents`, {
+    method: "POST", headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates" },
+    body: JSON.stringify(payload)
+  });
+  if (!r.ok) throw new Error(await r.text());
 }
 
 async function deleteDoc(id) {
-  const { error } = await supabase.from("documents").delete().eq("id", id);
-  if (error) throw error;
+  const r = await fetch(`${SB_URL}/rest/v1/documents?id=eq.${id}`, { method: "DELETE", headers: SB_HEADERS });
+  if (!r.ok) throw new Error(await r.text());
 }
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
@@ -331,12 +323,6 @@ async function genererPDF(doc, totaux) {
 
 // ─── APP ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [session, setSession] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [authError, setAuthError] = useState("");
-  const [authBusy, setAuthBusy] = useState(false);
 
   const [step, setStep] = useState("dashboard");
   const [note, setNote] = useState("");
@@ -352,22 +338,8 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Auth
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setAuthLoading(false);
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
-
-  // Charger docs quand connecté
-  useEffect(() => {
-    if (session) loadDocs();
-  }, [session]);
+  // Charger docs au démarrage
+  useEffect(() => { loadDocs(); }, []);
 
   const loadDocs = async () => {
     setListeLoading(true);
@@ -382,17 +354,7 @@ export default function App() {
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3000); };
 
-  const login = async () => {
-    setAuthBusy(true); setAuthError("");
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) setAuthError(error.message === "Invalid login credentials" ? "Email ou mot de passe incorrect" : error.message);
-    setAuthBusy(false);
-  };
 
-  const logout = async () => {
-    await supabase.auth.signOut();
-    setListe([]); setDoc(null); setStep("dashboard");
-  };
 
   const totaux = doc ? calcTotaux(doc) : { ht: 0, tva: 0, ttc: 0 };
 
@@ -404,10 +366,10 @@ export default function App() {
   const ouvrirDoc = (d) => { setDoc(d); setStep("formulaire"); };
 
   const sauvegarder = async (silent = false) => {
-    if (!doc || !session) return;
+    if (!doc) return;
     setSaving(true);
     try {
-      await upsertDoc(doc, session.user.id);
+      await upsertDoc(doc);
       await loadDocs();
       if (!silent) showToast(`✅ ${TYPES_DOC[doc.type_doc]?.label} ${doc.numero} sauvegardé`);
     } catch(e) {
@@ -418,23 +380,23 @@ export default function App() {
 
   const changerStatut = async (id, statut) => {
     const d = liste.find(d => d.id === id);
-    if (!d || !session) return;
+    if (!d) return;
     const updated = { ...d, statut, date_envoi: statut === "envoye" ? new Date().toISOString().split("T")[0] : d.date_envoi };
     try {
-      await upsertDoc(updated, session.user.id);
+      await upsertDoc(updated);
       await loadDocs();
       if (doc?.id === id) setDoc(updated);
     } catch(e) { showToast("❌ " + e.message); }
   };
 
   const convertirEn = async (type) => {
-    if (!doc || !session) return;
+    if (!doc) return;
     const situations = liste.filter(d => d.devis_origine === doc.id && d.type_doc === "situation");
     const newDoc = nouveauDoc(type, doc);
     if (type === "situation") newDoc.numero_situation = situations.length + 1;
     await changerStatut(doc.id, "accepte");
     try {
-      await upsertDoc(newDoc, session.user.id);
+      await upsertDoc(newDoc);
       await loadDocs();
       setDoc(newDoc);
       setConfirmConvert(null);
@@ -509,40 +471,7 @@ export default function App() {
     return matchType && matchStatut;
   });
 
-  // ── ÉCRAN DE CONNEXION ───────────────────────────────────────────────────
-  if (authLoading) return (
-    <div style={{ minHeight: "100vh", background: "#F4F4F4", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ color: "#E8A838", fontSize: 16, fontFamily: "'Barlow', sans-serif" }}>Chargement...</div>
-    </div>
-  );
 
-  if (!session) return (
-    <div style={{ minHeight: "100vh", background: "#F4F4F4", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow', sans-serif" }}>
-      <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&family=Barlow+Condensed:wght@700;800&display=swap" rel="stylesheet" />
-      <div style={{ background: "#FFF", borderRadius: 16, padding: "40px 44px", width: 380, boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <img src={LOGO_SRC} alt="CHOK'BÉTON" style={{ height: 60, objectFit: "contain", marginBottom: 12 }} />
-          <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 800, color: "#E8A838" }}>CHOK'BÉTON</div>
-          <div style={{ fontSize: 12, color: "#999", marginTop: 4 }}>Gestion commerciale</div>
-        </div>
-        <div style={{ marginBottom: 14 }}>
-          <label style={lbl}>Email</label>
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)} style={inp} placeholder="votre@email.fr" onKeyDown={e => e.key === "Enter" && login()} />
-        </div>
-        <div style={{ marginBottom: 20 }}>
-          <label style={lbl}>Mot de passe</label>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={inp} placeholder="••••••••" onKeyDown={e => e.key === "Enter" && login()} />
-        </div>
-        {authError && <div style={{ background: "#FFF0F0", border: "1px solid #E07070", borderRadius: 6, padding: "8px 12px", marginBottom: 16, color: "#C0392B", fontSize: 13 }}>⚠️ {authError}</div>}
-        <button onClick={login} disabled={authBusy || !email || !password} style={{ ...btn("#E8A838"), width: "100%", padding: "12px", fontSize: 14, opacity: authBusy ? 0.7 : 1 }}>
-          {authBusy ? "Connexion..." : "Se connecter"}
-        </button>
-        <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: "#AAA" }}>
-          Accès réservé aux directeurs CHOK'BÉTON
-        </div>
-      </div>
-    </div>
-  );
 
   // ── APP PRINCIPALE ────────────────────────────────────────────────────────
   return (
@@ -575,8 +504,7 @@ export default function App() {
               {step === "formulaire" && <button onClick={() => setStep("apercu")} style={{ ...btn("#E8A838"), padding: "5px 12px", fontSize: 11 }}>👁 Aperçu</button>}
             </>
           )}
-          <div style={{ fontSize: 11, color: "#999", marginLeft: 8 }}>{session.user.email}</div>
-          <button onClick={logout} style={{ ...btn("#999", true), padding: "5px 10px", fontSize: 11 }}>Déco.</button>
+
         </div>
       </div>
 
