@@ -2,11 +2,10 @@ import { useState, useCallback, useEffect } from "react";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
+import { supabase } from "./supabase";
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
-const EMPTY_LIGNE = { id: Date.now(), designation: "", unite: "", quantite: "", pu: "", commentaire: "" };
 const UNITES = ["cml", "ml", "m²", "U", "Forfait", "Ens"];
-const STORAGE_KEY = "chok_beton_devis_liste";
 const PROXY_URL = "";
 
 const STATUTS = {
@@ -39,7 +38,9 @@ function formatMontant(val) {
   return new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     .format(val).replace(/\u202f/g, " ").replace(/\u00a0/g, " ");
 }
+
 function statutDoc(doc) {
+  if (!doc) return "brouillon";
   if (doc.type_doc !== "devis") return doc.statut || "brouillon";
   if (doc.statut && doc.statut !== "brouillon") return doc.statut;
   const exp = new Date(doc.date);
@@ -47,11 +48,13 @@ function statutDoc(doc) {
   if (new Date() > exp) return "expire";
   return doc.statut || "brouillon";
 }
+
 function joursRestants(doc) {
   const exp = new Date(doc.date);
   exp.setDate(exp.getDate() + parseInt(doc.validite || 30));
   return Math.ceil((exp - new Date()) / 86400000);
 }
+
 function calcTotaux(doc) {
   const ht = (doc.lignes || []).reduce((s, l) => s + (parseFloat(l.quantite || 0) * parseFloat(l.pu || 0)), 0);
   const tva = doc.sans_tva ? 0 : ht * ((doc.tva || 20) / 100);
@@ -72,53 +75,80 @@ function genererNumero(type = "devis") {
   return `${prefix} ${annee}.${String(n).padStart(3, "0")}`;
 }
 
-// ─── STORAGE ──────────────────────────────────────────────────────────────────
-function chargerListe() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; } }
-function sauvegarderDoc(doc) {
-  const liste = chargerListe();
-  const idx = liste.findIndex(d => d.id === doc.id);
-  const entry = { ...doc, updatedAt: new Date().toISOString() };
-  if (idx >= 0) liste[idx] = entry; else liste.unshift(entry);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(liste));
-}
-function supprimerDoc(id) { localStorage.setItem(STORAGE_KEY, JSON.stringify(chargerListe().filter(d => d.id !== id))); }
-
 // ─── NOUVEAU DOC ──────────────────────────────────────────────────────────────
 function nouveauDoc(type = "devis", base = null) {
   const now = new Date().toISOString();
   return {
-    id: Date.now(), type_doc: type, numero: genererNumero(type),
-    date: now.split("T")[0], validite: 30,
-    client: base?.client || "", chantier: base?.chantier || "",
-    contact: base?.contact || "", email_client: base?.email_client || "",
+    id: Date.now(),
+    type_doc: type,
+    numero: genererNumero(type),
+    date: now.split("T")[0],
+    validite: 30,
+    client: base?.client || "",
+    chantier: base?.chantier || "",
+    contact: base?.contact || "",
+    email_client: base?.email_client || "",
     objet: base?.objet || "",
     lignes: base?.lignes ? base.lignes.map(l => ({ ...l, id: Date.now() + Math.random() })) : [],
-    sans_tva: base?.sans_tva || false, tva: base?.tva || 20,
-    statut: base?.type_doc === "devis" || !base ? "brouillon" : "brouillon", date_envoi: "", notes_statut: "",
+    sans_tva: base?.sans_tva || false,
+    tva: base?.tva || 20,
+    statut: "brouillon",
+    date_envoi: null,
     a_votre_charge: base?.a_votre_charge || AVC_DEFAUT,
     notes_bas: type === "facture" ? "Règlement à 45 jours fin de mois." : "Devis valable 30 jours. Paiement à 45 jours fin de mois.",
     devis_origine: base?.id || null,
     numero_situation: type === "situation" ? 1 : null,
-    createdAt: now, updatedAt: now,
   };
 }
 
-// ─── IA ───────────────────────────────────────────────────────────────────────
-async function interpreterNoteIA(note) {
-  const sys = `Tu es expert béton CHOK'BÉTON. Extrais les lignes de devis en JSON UNIQUEMENT:
-{"lignes":[{"designation":"...","unite":"cml|ml|m²|U|Forfait|Ens","quantite":10}],"client_detecte":"...","chantier_detecte":"..."}`;
-  const url = PROXY_URL || "https://api.anthropic.com/v1/messages";
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: sys, messages: [{ role: "user", content: note }] }) });
-  const data = await r.json();
-  return JSON.parse((data.content?.map(b => b.text || "").join("") || "{}").replace(/```json|```/g, "").trim());
+// ─── SUPABASE CRUD ────────────────────────────────────────────────────────────
+async function fetchDocs() {
+  const { data, error } = await supabase
+    .from("documents")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+async function upsertDoc(doc, userId) {
+  const payload = {
+    id: doc.id,
+    user_id: userId,
+    type_doc: doc.type_doc,
+    numero: doc.numero,
+    date: doc.date,
+    validite: doc.validite,
+    client: doc.client,
+    chantier: doc.chantier,
+    contact: doc.contact,
+    email_client: doc.email_client || "",
+    objet: doc.objet,
+    lignes: doc.lignes,
+    sans_tva: doc.sans_tva,
+    tva: doc.tva,
+    statut: doc.statut,
+    date_envoi: doc.date_envoi || null,
+    a_votre_charge: doc.a_votre_charge,
+    notes_bas: doc.notes_bas,
+    devis_origine: doc.devis_origine || null,
+    numero_situation: doc.numero_situation || null,
+  };
+  const { error } = await supabase.from("documents").upsert(payload);
+  if (error) throw error;
+}
+
+async function deleteDoc(id) {
+  const { error } = await supabase.from("documents").delete().eq("id", id);
+  if (error) throw error;
 }
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const inp = { background: "#FFF", border: "1px solid #D0D0D0", borderRadius: 6, color: "#1A1A1A", padding: "7px 10px", fontSize: 13, width: "100%", outline: "none", fontFamily: "'Barlow', sans-serif" };
 const sel = { ...inp, cursor: "pointer" };
 const btn = (color = "#E8A838", outline = false) => ({
-  background: outline ? "transparent" : color, border: `1.5px solid ${color}`,
+  background: outline ? "transparent" : color,
+  border: `1.5px solid ${color}`,
   color: outline ? color : (color === "#E8A838" || color === "#999" || color === "#DDD") ? "#000" : "#FFF",
   borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700,
   cursor: "pointer", fontFamily: "'Barlow Condensed', sans-serif",
@@ -127,7 +157,7 @@ const btn = (color = "#E8A838", outline = false) => ({
 const lbl = { display: "block", fontSize: 11, color: "#777", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 };
 const card = { background: "#FFF", border: "1px solid #E0E0E0", borderRadius: 10, padding: "20px 24px", marginBottom: 20 };
 
-// ─── COMPOSANTS ───────────────────────────────────────────────────────────────
+// ─── COMPOSANTS UI ────────────────────────────────────────────────────────────
 function Badge({ statut }) {
   const s = STATUTS[statut] || STATUTS.brouillon;
   return <span style={{ background: s.bg, color: s.color, border: `1px solid ${s.color}40`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>{s.label}</span>;
@@ -140,10 +170,10 @@ function BadgeType({ type }) {
 
 function StatCard({ label, value, sub, color = "#E8A838" }) {
   return (
-    <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderTop: `3px solid ${color}`, borderRadius: 10, padding: "18px 20px", flex: 1, minWidth: 140 }}>
-      <div style={{ fontSize: 11, color: "#999", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, color, fontFamily: "'Barlow Condensed', sans-serif" }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>{sub}</div>}
+    <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderTop: `3px solid ${color}`, borderRadius: 10, padding: "16px 18px", flex: 1, minWidth: 130 }}>
+      <div style={{ fontSize: 10, color: "#999", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, fontFamily: "'Barlow Condensed', sans-serif" }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: "#AAA", marginTop: 3 }}>{sub}</div>}
     </div>
   );
 }
@@ -172,7 +202,6 @@ async function genererPDF(doc, totaux) {
   let y = 8;
   const gold = [232, 168, 56], noir = [26, 26, 26], gris = [120, 120, 120], grisC = [248, 248, 248];
   const typeDoc = TYPES_DOC[doc.type_doc] || TYPES_DOC.devis;
-  const typeColor = typeDoc.color === "#E8A838" ? gold : typeDoc.color === "#8E44AD" ? [142, 68, 173] : [22, 160, 133];
 
   pdf.setFillColor(...gold); pdf.rect(0, 0, W, 4, "F");
 
@@ -190,15 +219,12 @@ async function genererPDF(doc, totaux) {
 
   pdf.setFontSize(26); pdf.setFont("helvetica", "bold"); pdf.setTextColor(...noir);
   pdf.text(typeDoc.label.toUpperCase(), W - mR, y + 8, { align: "right" });
-  pdf.setFontSize(13); pdf.setTextColor(...typeColor);
+  pdf.setFontSize(13); pdf.setTextColor(...gold);
   pdf.text(doc.numero, W - mR, y + 15, { align: "right" });
-  if (doc.type_doc === "situation" && doc.numero_situation) {
-    pdf.setFontSize(9); pdf.text(`Situation n°${doc.numero_situation}`, W - mR, y + 20, { align: "right" });
-  }
   pdf.setFontSize(8); pdf.setTextColor(...gris); pdf.setFont("helvetica", "normal");
-  pdf.text(`Émis le ${new Date(doc.date).toLocaleDateString("fr-FR")}`, W - mR, y + 24, { align: "right" });
-  if (doc.type_doc === "devis") pdf.text(`Validité : ${doc.validite} jours`, W - mR, y + 28, { align: "right" });
-  y += 32;
+  pdf.text(`Émis le ${new Date(doc.date).toLocaleDateString("fr-FR")}`, W - mR, y + 20, { align: "right" });
+  if (doc.type_doc === "devis") pdf.text(`Validité : ${doc.validite} jours`, W - mR, y + 24, { align: "right" });
+  y += 30;
 
   pdf.setDrawColor(...gold); pdf.setLineWidth(0.5); pdf.line(mL, y, W - mR, y); y += 4;
   pdf.setFontSize(10); pdf.setFont("helvetica", "bold"); pdf.setTextColor(...noir);
@@ -300,75 +326,131 @@ async function genererPDF(doc, totaux) {
   pdf.text(`${SOCIETE.nom} · ${SOCIETE.forme} · ${SOCIETE.rcs}`, mL, pH - 8);
   pdf.text(`SIRET ${SOCIETE.siret} · TVA ${SOCIETE.tva_intra}`, W - mR, pH - 8, { align: "right" });
   pdf.setFillColor(...gold); pdf.rect(0, pH - 3, W, 3, "F");
-
   return pdf;
 }
 
 // ─── APP ──────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+
   const [step, setStep] = useState("dashboard");
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [erreur, setErreur] = useState("");
   const [doc, setDoc] = useState(null);
   const [liste, setListe] = useState([]);
+  const [listeLoading, setListeLoading] = useState(false);
   const [confirmSuppr, setConfirmSuppr] = useState(null);
+  const [confirmConvert, setConfirmConvert] = useState(null);
   const [filtreStatut, setFiltreStatut] = useState("tous");
   const [filtreType, setFiltreType] = useState("tous");
   const [toast, setToast] = useState("");
-  const [confirmConvert, setConfirmConvert] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => { setListe(chargerListe()); }, []);
-  const refresh = () => setListe(chargerListe());
+  // Auth
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Charger docs quand connecté
+  useEffect(() => {
+    if (session) loadDocs();
+  }, [session]);
+
+  const loadDocs = async () => {
+    setListeLoading(true);
+    try {
+      const data = await fetchDocs();
+      setListe(data);
+    } catch(e) {
+      showToast("❌ Erreur chargement : " + e.message);
+    }
+    setListeLoading(false);
+  };
+
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3000); };
+
+  const login = async () => {
+    setAuthBusy(true); setAuthError("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) setAuthError(error.message === "Invalid login credentials" ? "Email ou mot de passe incorrect" : error.message);
+    setAuthBusy(false);
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    setListe([]); setDoc(null); setStep("dashboard");
+  };
 
   const totaux = doc ? calcTotaux(doc) : { ht: 0, tva: 0, ttc: 0 };
 
   const updateLigne = useCallback((i, p) => setDoc(d => { const l = [...d.lignes]; l[i] = { ...l[i], ...p }; return { ...d, lignes: l }; }), []);
   const deleteLigne = useCallback((i) => setDoc(d => ({ ...d, lignes: d.lignes.filter((_, j) => j !== i) })), []);
-  const addLigne = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { ...EMPTY_LIGNE, id: Date.now() }] }));
+  const addLigne = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), designation: "", unite: "", quantite: "", pu: "" }] }));
 
   const creerDoc = (type = "devis") => { setDoc(nouveauDoc(type)); setNote(""); setStep("note"); };
-  const ouvrirDoc = (d) => { setDoc(d); setNote(""); setStep("formulaire"); };
+  const ouvrirDoc = (d) => { setDoc(d); setStep("formulaire"); };
 
-  const sauvegarder = (silent = false) => {
-    if (!doc) return;
-    sauvegarderDoc(doc);
-    refresh();
-    if (!silent) showToast(`✅ ${TYPES_DOC[doc.type_doc]?.label || "Document"} ${doc.numero} sauvegardé`);
-  };
-
-  const changerStatut = (id, statut) => {
-    const liste = chargerListe();
-    const idx = liste.findIndex(d => d.id === id);
-    if (idx >= 0) {
-      liste[idx].statut = statut;
-      if (statut === "envoye") liste[idx].date_envoi = new Date().toISOString().split("T")[0];
-      liste[idx].updatedAt = new Date().toISOString();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(liste));
-      refresh();
-      if (doc?.id === id) setDoc(d => ({ ...d, statut, date_envoi: statut === "envoye" ? new Date().toISOString().split("T")[0] : d.date_envoi }));
+  const sauvegarder = async (silent = false) => {
+    if (!doc || !session) return;
+    setSaving(true);
+    try {
+      await upsertDoc(doc, session.user.id);
+      await loadDocs();
+      if (!silent) showToast(`✅ ${TYPES_DOC[doc.type_doc]?.label} ${doc.numero} sauvegardé`);
+    } catch(e) {
+      showToast("❌ Erreur sauvegarde : " + e.message);
     }
+    setSaving(false);
   };
 
-  const convertirEn = (type) => {
-    if (!doc) return;
-    const base = { ...doc };
-    const newDoc = nouveauDoc(type, base);
-    if (type === "situation") {
-      const situations = chargerListe().filter(d => d.devis_origine === doc.id && d.type_doc === "situation");
-      newDoc.numero_situation = situations.length + 1;
-    }
-    if (type === "facture" || type === "situation") changerStatut(doc.id, "accepte");
-    sauvegarderDoc(newDoc);
-    refresh();
-    setDoc(newDoc);
-    setConfirmConvert(null);
-    setStep("formulaire");
-    showToast(`✅ Converti en ${TYPES_DOC[type].label} — ${newDoc.numero}`);
+  const changerStatut = async (id, statut) => {
+    const d = liste.find(d => d.id === id);
+    if (!d || !session) return;
+    const updated = { ...d, statut, date_envoi: statut === "envoye" ? new Date().toISOString().split("T")[0] : d.date_envoi };
+    try {
+      await upsertDoc(updated, session.user.id);
+      await loadDocs();
+      if (doc?.id === id) setDoc(updated);
+    } catch(e) { showToast("❌ " + e.message); }
   };
 
-  const supprimer = (id) => { supprimerDoc(id); refresh(); setConfirmSuppr(null); };
+  const convertirEn = async (type) => {
+    if (!doc || !session) return;
+    const situations = liste.filter(d => d.devis_origine === doc.id && d.type_doc === "situation");
+    const newDoc = nouveauDoc(type, doc);
+    if (type === "situation") newDoc.numero_situation = situations.length + 1;
+    await changerStatut(doc.id, "accepte");
+    try {
+      await upsertDoc(newDoc, session.user.id);
+      await loadDocs();
+      setDoc(newDoc);
+      setConfirmConvert(null);
+      setStep("formulaire");
+      showToast(`✅ Converti en ${TYPES_DOC[type].label} — ${newDoc.numero}`);
+    } catch(e) { showToast("❌ " + e.message); }
+  };
+
+  const supprimer = async (id) => {
+    try {
+      await deleteDoc(id);
+      await loadDocs();
+      setConfirmSuppr(null);
+      showToast("🗑 Document supprimé");
+    } catch(e) { showToast("❌ " + e.message); }
+  };
 
   const nomFichier = () => {
     if (!doc) return "document";
@@ -382,7 +464,7 @@ export default function App() {
     if (!doc) return;
     const t = calcTotaux(doc);
     const sujet = encodeURIComponent(`${TYPES_DOC[doc.type_doc]?.label} ${doc.numero} – CHOK'BÉTON`);
-    const corps = encodeURIComponent(`Bonjour${doc.contact ? ` ${doc.contact}` : ""},\n\nVeuillez trouver ci-joint notre ${TYPES_DOC[doc.type_doc]?.label?.toLowerCase()} ${doc.numero}${doc.objet ? ` concernant : ${doc.objet}` : ""}.\nChantier : ${doc.chantier || "—"}\n\nMontant ${doc.sans_tva ? "HT" : "TTC"} : ${formatMontant(doc.sans_tva ? t.ht : t.ttc)} €${doc.type_doc === "devis" ? `\n\nCe devis est valable ${doc.validite} jours à compter du ${new Date(doc.date).toLocaleDateString("fr-FR")}.` : ""}\n\nCordialement,\nChristopher Dupré\nCHOK'BÉTON – Tél. 01 34 50 93 56 – 06 24 26 21 05\nchristopher@chok-beton.fr`);
+    const corps = encodeURIComponent(`Bonjour${doc.contact ? ` ${doc.contact}` : ""},\n\nVeuillez trouver ci-joint notre ${TYPES_DOC[doc.type_doc]?.label?.toLowerCase()} ${doc.numero}${doc.objet ? ` concernant : ${doc.objet}` : ""}.\nChantier : ${doc.chantier || "—"}\n\nMontant ${doc.sans_tva ? "HT" : "TTC"} : ${formatMontant(doc.sans_tva ? t.ht : t.ttc)} €\n\nCordialement,\nChristopher Dupré\nCHOK'BÉTON – Tél. ${SOCIETE.tel} – ${SOCIETE.mobile}\nchristopher@chok-beton.fr`);
     window.location.href = `mailto:${doc.email_client || ""}?subject=${sujet}&body=${corps}`;
     if (doc.type_doc === "devis") changerStatut(doc.id, "envoye");
     showToast("📧 Mail ouvert — pensez à joindre le PDF !");
@@ -410,38 +492,59 @@ export default function App() {
     XLSX.writeFile(wb, `${nomFichier()}.xlsx`);
   };
 
-  // ── STATS TABLEAU DE BORD ────────────────────────────────────────────────
+  // Stats
   const devisList = liste.filter(d => d.type_doc === "devis");
   const facturesList = liste.filter(d => d.type_doc === "facture");
   const situationsList = liste.filter(d => d.type_doc === "situation");
   const devisAcceptes = devisList.filter(d => d.statut === "accepte");
   const devisRefuses = devisList.filter(d => d.statut === "refuse");
   const devisEnvoyes = devisList.filter(d => d.statut === "envoye");
-  const tauxAcceptation = devisList.filter(d => d.statut === "accepte" || d.statut === "refuse").length > 0
-    ? Math.round(devisAcceptes.length / (devisAcceptes.length + devisRefuses.length) * 100) : null;
+  const tauxAcceptation = (devisAcceptes.length + devisRefuses.length) > 0 ? Math.round(devisAcceptes.length / (devisAcceptes.length + devisRefuses.length) * 100) : null;
   const caDevis = devisAcceptes.reduce((s, d) => s + calcTotaux(d).ttc, 0);
   const caFactures = facturesList.reduce((s, d) => s + calcTotaux(d).ttc, 0);
   const alertes = liste.filter(d => { const s = statutDoc(d); const j = joursRestants(d); return d.type_doc === "devis" && ((s === "envoye" && j <= 7) || s === "expire"); });
-
   const listeFiltree = liste.filter(d => {
     const matchType = filtreType === "tous" || d.type_doc === filtreType;
     const matchStatut = filtreStatut === "tous" || statutDoc(d) === filtreStatut;
     return matchType && matchStatut;
   });
 
-  const lancerIA = async () => {
-    if (!note.trim()) return;
-    setLoading(true); setErreur("");
-    try {
-      const r = await interpreterNoteIA(note);
-      const lignesIA = (r.lignes || []).map((l, i) => ({ id: Date.now() + i, designation: l.designation || "", unite: l.unite || "", quantite: l.quantite ? String(l.quantite) : "", pu: "" }));
-      setDoc(d => ({ ...d, lignes: lignesIA, client: r.client_detecte || d.client, chantier: r.chantier_detecte || d.chantier }));
-      setStep("formulaire");
-    } catch (e) { setErreur("Erreur : " + e.message); }
-    setLoading(false);
-  };
+  // ── ÉCRAN DE CONNEXION ───────────────────────────────────────────────────
+  if (authLoading) return (
+    <div style={{ minHeight: "100vh", background: "#F4F4F4", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ color: "#E8A838", fontSize: 16, fontFamily: "'Barlow', sans-serif" }}>Chargement...</div>
+    </div>
+  );
 
-  // ── RENDU ────────────────────────────────────────────────────────────────
+  if (!session) return (
+    <div style={{ minHeight: "100vh", background: "#F4F4F4", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow', sans-serif" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&family=Barlow+Condensed:wght@700;800&display=swap" rel="stylesheet" />
+      <div style={{ background: "#FFF", borderRadius: 16, padding: "40px 44px", width: 380, boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <img src={LOGO_SRC} alt="CHOK'BÉTON" style={{ height: 60, objectFit: "contain", marginBottom: 12 }} />
+          <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 800, color: "#E8A838" }}>CHOK'BÉTON</div>
+          <div style={{ fontSize: 12, color: "#999", marginTop: 4 }}>Gestion commerciale</div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={lbl}>Email</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} style={inp} placeholder="votre@email.fr" onKeyDown={e => e.key === "Enter" && login()} />
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <label style={lbl}>Mot de passe</label>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={inp} placeholder="••••••••" onKeyDown={e => e.key === "Enter" && login()} />
+        </div>
+        {authError && <div style={{ background: "#FFF0F0", border: "1px solid #E07070", borderRadius: 6, padding: "8px 12px", marginBottom: 16, color: "#C0392B", fontSize: 13 }}>⚠️ {authError}</div>}
+        <button onClick={login} disabled={authBusy || !email || !password} style={{ ...btn("#E8A838"), width: "100%", padding: "12px", fontSize: 14, opacity: authBusy ? 0.7 : 1 }}>
+          {authBusy ? "Connexion..." : "Se connecter"}
+        </button>
+        <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: "#AAA" }}>
+          Accès réservé aux directeurs CHOK'BÉTON
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── APP PRINCIPALE ────────────────────────────────────────────────────────
   return (
     <div style={{ minHeight: "100vh", background: "#F4F4F4", fontFamily: "'Barlow', 'Helvetica Neue', sans-serif", color: "#1A1A1A" }}>
       <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@500;700;800&display=swap" rel="stylesheet" />
@@ -451,25 +554,29 @@ export default function App() {
       {/* HEADER */}
       <div style={{ background: "#FFF", borderBottom: "1px solid #E0E0E0", padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setStep("dashboard")}>
-          <img src={LOGO_SRC} alt="CHOK'BÉTON" style={{ height: 38, objectFit: "contain" }} />
+          <img src={LOGO_SRC} alt="CHOK'BÉTON" style={{ height: 36, objectFit: "contain" }} />
           <div>
-            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: 16, color: "#E8A838" }}>CHOK'BÉTON</div>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: 15, color: "#E8A838" }}>CHOK'BÉTON</div>
             <div style={{ fontSize: 9, color: "#999", letterSpacing: "0.1em", textTransform: "uppercase" }}>Gestion commerciale</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {alertes.length > 0 && <span style={{ background: "#E74C3C", color: "#FFF", borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>⚠️ {alertes.length}</span>}
           {["dashboard", "liste"].map(s => (
-            <button key={s} onClick={() => setStep(s)} style={{ ...btn(step === s ? "#E8A838" : "#DDD", step !== s), padding: "5px 12px", fontSize: 11 }}>
+            <button key={s} onClick={() => setStep(s)} style={{ ...btn(step === s ? "#E8A838" : "#DDD", step !== s), padding: "5px 12px", fontSize: 11, color: step === s ? "#000" : "#666" }}>
               {s === "dashboard" ? "📊 Dashboard" : "📋 Documents"}
             </button>
           ))}
           {(step === "formulaire" || step === "apercu") && (
             <>
-              <button onClick={() => sauvegarder()} style={{ ...btn("#27AE60"), padding: "5px 12px", fontSize: 11 }}>💾 Sauvegarder</button>
+              <button onClick={() => sauvegarder()} disabled={saving} style={{ ...btn("#27AE60"), padding: "5px 12px", fontSize: 11, opacity: saving ? 0.7 : 1 }}>
+                {saving ? "⏳" : "💾"} Sauvegarder
+              </button>
               {step === "formulaire" && <button onClick={() => setStep("apercu")} style={{ ...btn("#E8A838"), padding: "5px 12px", fontSize: 11 }}>👁 Aperçu</button>}
             </>
           )}
+          <div style={{ fontSize: 11, color: "#999", marginLeft: 8 }}>{session.user.email}</div>
+          <button onClick={logout} style={{ ...btn("#999", true), padding: "5px 10px", fontSize: 11 }}>Déco.</button>
         </div>
       </div>
 
@@ -481,13 +588,12 @@ export default function App() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
               <h1 style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 26, fontWeight: 800, margin: 0 }}>Tableau de bord</h1>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => creerDoc("devis")} style={{ ...btn("#E8A838"), padding: "7px 16px", fontSize: 12 }}>+ Devis</button>
-                <button onClick={() => creerDoc("facture")} style={{ ...btn("#8E44AD"), padding: "7px 16px", fontSize: 12 }}>+ Facture</button>
-                <button onClick={() => creerDoc("situation")} style={{ ...btn("#16A085"), padding: "7px 16px", fontSize: 12 }}>+ Situation</button>
+                <button onClick={() => creerDoc("devis")} style={{ ...btn("#E8A838"), padding: "7px 14px", fontSize: 12 }}>+ Devis</button>
+                <button onClick={() => creerDoc("facture")} style={{ ...btn("#8E44AD"), padding: "7px 14px", fontSize: 12 }}>+ Facture</button>
+                <button onClick={() => creerDoc("situation")} style={{ ...btn("#16A085"), padding: "7px 14px", fontSize: 12 }}>+ Situation</button>
               </div>
             </div>
 
-            {/* Alertes */}
             {alertes.length > 0 && (
               <div style={{ marginBottom: 20 }}>
                 {alertes.map(d => {
@@ -504,7 +610,6 @@ export default function App() {
               </div>
             )}
 
-            {/* KPIs */}
             <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
               <StatCard label="CA Devis acceptés" value={`${formatMontant(caDevis)} €`} sub={`${devisAcceptes.length} devis`} color="#27AE60" />
               <StatCard label="CA Facturé" value={`${formatMontant(caFactures)} €`} sub={`${facturesList.length} facture(s)`} color="#8E44AD" />
@@ -513,31 +618,13 @@ export default function App() {
               <StatCard label="Situations" value={situationsList.length} sub="en cours" color="#16A085" />
             </div>
 
-            {/* Répartition */}
-            <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-              {[
-                { label: "Devis", count: devisList.length, color: "#E8A838", detail: [["Brouillon", devisList.filter(d => statutDoc(d) === "brouillon").length, "#999"], ["Envoyé", devisEnvoyes.length, "#2980B9"], ["Accepté", devisAcceptes.length, "#27AE60"], ["Refusé", devisRefuses.length, "#E74C3C"], ["Expiré", devisList.filter(d => statutDoc(d) === "expire").length, "#E67E22"]] },
-                { label: "Factures", count: facturesList.length, color: "#8E44AD", detail: [] },
-                { label: "Situations", count: situationsList.length, color: "#16A085", detail: [] },
-              ].map(({ label, count, color, detail }) => (
-                <div key={label} style={{ ...card, flex: 1, minWidth: 200, marginBottom: 0 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-                    <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 700 }}>{label}</span>
-                    <span style={{ fontSize: 22, fontWeight: 800, color, fontFamily: "'Barlow Condensed', sans-serif" }}>{count}</span>
-                  </div>
-                  {detail.map(([lbl, n, c]) => n > 0 && (
-                    <div key={lbl} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#666", marginBottom: 3 }}>
-                      <span style={{ color: c, fontWeight: 600 }}>● {lbl}</span><span>{n}</span>
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-
-            {/* Derniers documents */}
             <div style={card}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 700, marginBottom: 14 }}>Derniers documents</div>
-              {liste.slice(0, 8).map(d => {
+              {listeLoading ? (
+                <div style={{ color: "#AAA", textAlign: "center", padding: "20px" }}>Chargement...</div>
+              ) : liste.length === 0 ? (
+                <div style={{ color: "#AAA", textAlign: "center", padding: "24px 0" }}>Aucun document — créez votre premier devis</div>
+              ) : liste.slice(0, 8).map(d => {
                 const t = calcTotaux(d);
                 const s = statutDoc(d);
                 return (
@@ -557,8 +644,7 @@ export default function App() {
                   </div>
                 );
               })}
-              {liste.length === 0 && <div style={{ color: "#AAA", textAlign: "center", padding: "24px 0" }}>Aucun document</div>}
-              {liste.length > 0 && <button onClick={() => setStep("liste")} style={{ ...btn("#999", true), width: "100%", marginTop: 12, padding: "7px" }}>Voir tous les documents</button>}
+              {liste.length > 8 && <button onClick={() => setStep("liste")} style={{ ...btn("#999", true), width: "100%", marginTop: 12, padding: "7px" }}>Voir tous les documents ({liste.length})</button>}
             </div>
           </div>
         )}
@@ -567,7 +653,7 @@ export default function App() {
         {step === "liste" && (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h1 style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 26, fontWeight: 800, margin: 0 }}>Documents</h1>
+              <h1 style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 26, fontWeight: 800, margin: 0 }}>Documents ({liste.length})</h1>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={() => creerDoc("devis")} style={{ ...btn("#E8A838"), padding: "7px 14px", fontSize: 12 }}>+ Devis</button>
                 <button onClick={() => creerDoc("facture")} style={{ ...btn("#8E44AD"), padding: "7px 14px", fontSize: 12 }}>+ Facture</button>
@@ -575,21 +661,21 @@ export default function App() {
               </div>
             </div>
 
-            {/* Filtres */}
             <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
               {[["tous","Tous"], ["devis","Devis"], ["facture","Factures"], ["situation","Situations"]].map(([k, l]) => (
-                <button key={k} onClick={() => setFiltreType(k)} style={{ ...btn(filtreType === k ? "#E8A838" : "#DDD", filtreType !== k), padding: "5px 12px", fontSize: 11 }}>{l}</button>
+                <button key={k} onClick={() => setFiltreType(k)} style={{ ...btn(filtreType === k ? "#E8A838" : "#DDD", filtreType !== k), padding: "5px 12px", fontSize: 11, color: filtreType === k ? "#000" : "#666" }}>{l}</button>
               ))}
-              <span style={{ margin: "0 4px", color: "#CCC" }}>|</span>
-              {[["tous","Tous statuts"], ...Object.entries(STATUTS).map(([k, v]) => [k, v.label])].map(([k, l]) => (
+              <span style={{ margin: "0 4px", color: "#CCC", alignSelf: "center" }}>|</span>
+              {[["tous","Tous"], ...Object.entries(STATUTS).map(([k, v]) => [k, v.label])].map(([k, l]) => (
                 <button key={k} onClick={() => setFiltreStatut(k)} style={{ ...btn(filtreStatut === k ? "#1A1A1A" : "#DDD", filtreStatut !== k), padding: "5px 12px", fontSize: 11, color: filtreStatut === k ? "#FFF" : "#666" }}>{l}</button>
               ))}
             </div>
 
-            {listeFiltree.length === 0 ? (
+            {listeLoading ? (
+              <div style={{ color: "#AAA", textAlign: "center", padding: "40px" }}>Chargement...</div>
+            ) : listeFiltree.length === 0 ? (
               <div style={{ textAlign: "center", padding: "60px", color: "#AAA", border: "1px dashed #DDD", borderRadius: 12 }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>📄</div>
-                Aucun document
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📄</div>Aucun document
               </div>
             ) : listeFiltree.map(d => {
               const t = calcTotaux(d);
@@ -615,7 +701,7 @@ export default function App() {
                     {d.type_doc === "devis" && s === "brouillon" && <button onClick={() => changerStatut(d.id, "envoye")} style={{ ...btn("#2980B9"), padding: "4px 10px", fontSize: 10 }}>📤</button>}
                     {d.type_doc === "devis" && s === "envoye" && <button onClick={() => changerStatut(d.id, "accepte")} style={{ ...btn("#27AE60"), padding: "4px 10px", fontSize: 10 }}>✅</button>}
                     {d.type_doc === "devis" && s === "envoye" && <button onClick={() => changerStatut(d.id, "refuse")} style={{ ...btn("#E74C3C"), padding: "4px 10px", fontSize: 10 }}>❌</button>}
-                    <button onClick={() => ouvrirDoc(d)} style={{ ...btn("#E8A838"), padding: "4px 10px", fontSize: 10 }}>✏️</button>
+                    <button onClick={() => ouvrirDoc(d)} style={{ ...btn("#E8A838"), padding: "4px 10px", fontSize: 10 }}>✏️ Modifier</button>
                     <button onClick={() => setConfirmSuppr(d.id)} style={{ ...btn("#E74C3C", true), padding: "4px 8px", fontSize: 10 }}>🗑</button>
                   </div>
                 </div>
@@ -649,13 +735,27 @@ export default function App() {
               <div onClick={() => setStep("formulaire")} style={{ ...card, flex: 1, cursor: "pointer", textAlign: "center", padding: "24px" }}>
                 <div style={{ fontSize: 28 }}>📝</div>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 15, fontWeight: 700, color: "#555", marginTop: 8 }}>SAISIE DIRECTE</div>
+                <div style={{ fontSize: 12, color: "#999", marginTop: 4 }}>Formulaire ligne par ligne</div>
               </div>
               <div style={{ ...card, flex: 2, borderColor: "#E8A838" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 15, fontWeight: 700, color: "#E8A838", marginBottom: 10 }}>🤖 INTERPRÉTATION IA</div>
-                {!PROXY_URL && <div style={{ background: "#FFF8E1", border: "1px solid #F9A825", borderRadius: 6, padding: "7px 12px", marginBottom: 10, fontSize: 11, color: "#856404" }}>⚠️ Proxy IA non configuré</div>}
+                {!PROXY_URL && <div style={{ background: "#FFF8E1", border: "1px solid #F9A825", borderRadius: 6, padding: "7px 12px", marginBottom: 10, fontSize: 11, color: "#856404" }}>⚠️ Proxy IA non encore configuré — utilisez la saisie directe</div>}
                 <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Décris les travaux librement..." spellCheck lang="fr" style={{ ...inp, minHeight: 120, resize: "vertical", lineHeight: 1.7 }} />
                 {erreur && <div style={{ background: "#FFF0F0", border: "1px solid #E07070", borderRadius: 6, padding: "7px 12px", margin: "8px 0", color: "#C0392B", fontSize: 12 }}>⚠️ {erreur}</div>}
-                <button onClick={lancerIA} disabled={loading || !note.trim() || !PROXY_URL} style={{ ...btn(PROXY_URL ? "#E8A838" : "#CCC"), marginTop: 10, opacity: !PROXY_URL ? 0.5 : 1 }}>
+                <button onClick={async () => {
+                  if (!note.trim() || !PROXY_URL) return;
+                  setLoading(true); setErreur("");
+                  try {
+                    const r = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: "Extrais les lignes de devis en JSON: {\"lignes\":[{\"designation\":\"...\",\"unite\":\"cml|ml|m²|U|Forfait|Ens\",\"quantite\":10}],\"client_detecte\":\"...\",\"chantier_detecte\":\"...\"}", messages: [{ role: "user", content: note }] }) });
+                    const data = await r.json();
+                    const text = data.content?.map(b => b.text || "").join("") || "{}";
+                    const result = JSON.parse(text.replace(/```json|```/g, "").trim());
+                    const lignesIA = (result.lignes || []).map((l, i) => ({ id: Date.now() + i, designation: l.designation || "", unite: l.unite || "", quantite: l.quantite ? String(l.quantite) : "", pu: "" }));
+                    setDoc(d => ({ ...d, lignes: lignesIA, client: result.client_detecte || d.client, chantier: result.chantier_detecte || d.chantier }));
+                    setStep("formulaire");
+                  } catch(e) { setErreur("Erreur : " + e.message); }
+                  setLoading(false);
+                }} disabled={loading || !note.trim() || !PROXY_URL} style={{ ...btn(PROXY_URL ? "#E8A838" : "#CCC"), marginTop: 10, opacity: !PROXY_URL ? 0.5 : 1 }}>
                   {loading ? "⏳ Analyse..." : "🤖 Interpréter"}
                 </button>
               </div>
@@ -666,19 +766,20 @@ export default function App() {
         {/* ── FORMULAIRE ── */}
         {step === "formulaire" && doc && doc.type_doc && (
           <div>
-            {/* Barre type + statut */}
             <div style={{ ...card, padding: "12px 20px", marginBottom: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <BadgeType type={doc.type_doc} />
-                <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 800, color: "#E8A838" }}>{doc.numero}</span>
+                <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 15, fontWeight: 800, color: "#E8A838" }}>{doc.numero}</span>
                 {doc.type_doc === "devis" && (
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                     {Object.entries(STATUTS).map(([k, v]) => (
-                      <button key={k} onClick={() => setDoc(d => ({ ...d, statut: k }))} style={{ ...btn(v.color, (doc.statut || "brouillon") !== k), padding: "3px 10px", fontSize: 10 }}>{v.label}</button>
+                      <button key={k} onClick={() => setDoc(d => ({ ...d, statut: k }))}
+                        style={{ ...btn(v.color, (doc.statut || "brouillon") !== k), padding: "3px 10px", fontSize: 10 }}>
+                        {v.label}
+                      </button>
                     ))}
                   </div>
                 )}
-                {/* Conversion */}
                 {doc.type_doc === "devis" && (
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                     <button onClick={() => setConfirmConvert("facture")} style={{ ...btn("#8E44AD"), padding: "4px 12px", fontSize: 11 }}>→ Facture</button>
@@ -691,7 +792,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Infos */}
             <div style={{ ...card, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
               <div><label style={lbl}>N° Document</label><input value={doc.numero} onChange={e => setDoc(d => ({ ...d, numero: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Date</label><input type="date" value={doc.date} onChange={e => setDoc(d => ({ ...d, date: e.target.value }))} style={inp} /></div>
@@ -703,23 +803,20 @@ export default function App() {
               <div style={{ gridColumn: "2/-1" }}><label style={lbl}>Objet</label><input value={doc.objet} onChange={e => setDoc(d => ({ ...d, objet: e.target.value }))} style={inp} spellCheck lang="fr" placeholder="Objet des travaux" /></div>
             </div>
 
-            {/* Lignes */}
             <div style={{ display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, padding: "0 12px", marginBottom: 6, fontSize: 10, color: "#666", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600 }}>
               <span>Désignation</span><span>Unité</span><span style={{ textAlign: "right" }}>Quantité</span><span style={{ textAlign: "right" }}>PU HT €</span><span style={{ textAlign: "right" }}>Total HT €</span><span />
             </div>
-            {doc.lignes.map((l, i) => <LigneDevis key={l.id} ligne={l} index={i} onUpdate={updateLigne} onDelete={deleteLigne} />)}
-            {doc.lignes.length === 0 && <div style={{ textAlign: "center", padding: "28px", color: "#BBB", border: "1px dashed #DDD", borderRadius: 10, marginBottom: 12 }}>Aucune ligne</div>}
+            {(doc.lignes || []).map((l, i) => <LigneDevis key={l.id} ligne={l} index={i} onUpdate={updateLigne} onDelete={deleteLigne} />)}
+            {(doc.lignes || []).length === 0 && <div style={{ textAlign: "center", padding: "28px", color: "#BBB", border: "1px dashed #DDD", borderRadius: 10, marginBottom: 12 }}>Aucune ligne</div>}
             <button onClick={addLigne} style={{ ...btn("#999", true), width: "100%", marginBottom: 16 }}>+ Ajouter une ligne</button>
 
-            {/* À votre charge (devis seulement) */}
             {doc.type_doc === "devis" && (
               <div style={{ background: "#FFFBF2", border: "1px solid #F0D080", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
                 <label style={{ ...lbl, color: "#B8861A" }}>À votre charge</label>
-                <textarea value={doc.a_votre_charge} onChange={e => setDoc(d => ({ ...d, a_votre_charge: e.target.value }))} spellCheck lang="fr" style={{ ...inp, minHeight: 80, resize: "vertical", lineHeight: 1.6 }} />
+                <textarea value={doc.a_votre_charge || ""} onChange={e => setDoc(d => ({ ...d, a_votre_charge: e.target.value }))} spellCheck lang="fr" style={{ ...inp, minHeight: 80, resize: "vertical", lineHeight: 1.6 }} />
               </div>
             )}
 
-            {/* Totaux */}
             <div style={card}>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", minWidth: 300, padding: "4px 0" }}>
@@ -728,7 +825,7 @@ export default function App() {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: "#555" }}>
-                    <input type="checkbox" checked={doc.sans_tva} onChange={e => setDoc(d => ({ ...d, sans_tva: e.target.checked }))} style={{ width: 16, height: 16, accentColor: "#E8A838" }} />
+                    <input type="checkbox" checked={doc.sans_tva || false} onChange={e => setDoc(d => ({ ...d, sans_tva: e.target.checked }))} style={{ width: 16, height: 16, accentColor: "#E8A838" }} />
                     Sans TVA
                   </label>
                   {!doc.sans_tva && (
@@ -747,29 +844,26 @@ export default function App() {
               </div>
               <div style={{ marginTop: 16 }}>
                 <label style={lbl}>Notes / Conditions</label>
-                <textarea value={doc.notes_bas} onChange={e => setDoc(d => ({ ...d, notes_bas: e.target.value }))} spellCheck lang="fr" style={{ ...inp, minHeight: 60, resize: "vertical" }} />
+                <textarea value={doc.notes_bas || ""} onChange={e => setDoc(d => ({ ...d, notes_bas: e.target.value }))} spellCheck lang="fr" style={{ ...inp, minHeight: 60, resize: "vertical" }} />
               </div>
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button onClick={() => sauvegarder()} style={btn("#27AE60")}>💾 Sauvegarder</button>
+              <button onClick={() => sauvegarder()} disabled={saving} style={{ ...btn("#27AE60"), opacity: saving ? 0.7 : 1 }}>
+                {saving ? "⏳ Sauvegarde..." : "💾 Sauvegarder"}
+              </button>
               <button onClick={exporterXLSX} style={btn("#2980B9")}>📊 XLSX</button>
               <button onClick={() => setStep("apercu")} style={btn("#E8A838")}>👁 Aperçu PDF</button>
               <button onClick={envoyerMail} style={btn("#E67E22")}>📧 Envoyer</button>
-              <button onClick={() => setStep("note")} style={btn("#999", true)}>← Retour</button>
+              <button onClick={() => setStep(liste.length > 0 ? "liste" : "dashboard")} style={btn("#999", true)}>← Retour</button>
             </div>
 
-            {/* Modal conversion */}
             {confirmConvert && (
               <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
                 <div style={{ background: "#FFF", borderRadius: 12, padding: "28px", maxWidth: 400, width: "90%", textAlign: "center" }}>
                   <div style={{ fontSize: 32, marginBottom: 12 }}>{confirmConvert === "facture" ? "🧾" : "📋"}</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>
-                    Convertir en {TYPES_DOC[confirmConvert]?.label} ?
-                  </div>
-                  <div style={{ fontSize: 13, color: "#888", marginBottom: 20 }}>
-                    Un nouveau document sera créé avec les mêmes lignes.<br />Le devis passera au statut "Accepté".
-                  </div>
+                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Convertir en {TYPES_DOC[confirmConvert]?.label} ?</div>
+                  <div style={{ fontSize: 13, color: "#888", marginBottom: 20 }}>Un nouveau document sera créé avec les mêmes lignes.<br />Le devis passera au statut "Accepté".</div>
                   <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
                     <button onClick={() => setConfirmConvert(null)} style={{ ...btn("#999", true), padding: "7px 18px" }}>Annuler</button>
                     <button onClick={() => convertirEn(confirmConvert)} style={{ ...btn(TYPES_DOC[confirmConvert]?.color || "#E8A838"), padding: "7px 18px" }}>Convertir</button>
@@ -784,9 +878,7 @@ export default function App() {
         {step === "apercu" && doc && (
           <div>
             <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-              <h2 style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700, color: "#E8A838", margin: 0 }}>
-                Aperçu — {doc.numero}
-              </h2>
+              <h2 style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700, color: "#E8A838", margin: 0 }}>Aperçu — {doc.numero}</h2>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={() => setStep("formulaire")} style={btn("#999", true)}>← Modifier</button>
                 <button onClick={() => sauvegarder()} style={btn("#27AE60")}>💾</button>
@@ -800,7 +892,6 @@ export default function App() {
               <div id="doc-print" style={{ width: 794, minHeight: 1123, background: "#FFF", fontFamily: "'Barlow', Arial, sans-serif", fontSize: 11, color: "#1A1A1A", lineHeight: 1.5, boxShadow: "0 8px 40px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column" }}>
                 <div style={{ background: "#E8A838", height: 6, flexShrink: 0 }} />
                 <div style={{ padding: "28px 44px 0", flex: 1, display: "flex", flexDirection: "column" }}>
-                  {/* En-tête */}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
                       <img src={LOGO_SRC} alt="" style={{ height: 68, objectFit: "contain", flexShrink: 0 }} />
@@ -810,9 +901,8 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 32, fontWeight: 800, fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: "0.06em", lineHeight: 1, color: TYPES_DOC[doc.type_doc]?.color === "#E8A838" ? "#1A1A1A" : TYPES_DOC[doc.type_doc]?.color }}>{TYPES_DOC[doc.type_doc]?.label?.toUpperCase()}</div>
+                      <div style={{ fontSize: 32, fontWeight: 800, fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: "0.06em", lineHeight: 1 }}>{(TYPES_DOC[doc.type_doc]?.label || "DEVIS").toUpperCase()}</div>
                       <div style={{ fontSize: 15, color: "#E8A838", fontWeight: 700, marginTop: 3, fontFamily: "'Barlow Condensed', sans-serif" }}>{doc.numero}</div>
-                      {doc.type_doc === "situation" && doc.numero_situation && <div style={{ fontSize: 10, color: "#16A085", fontWeight: 600 }}>Situation n°{doc.numero_situation}</div>}
                       <div style={{ fontSize: 9.5, color: "#666", marginTop: 6, lineHeight: 1.8 }}>Émis le {new Date(doc.date).toLocaleDateString("fr-FR")}<br />{doc.type_doc === "devis" && `Validité : ${doc.validite} jours`}</div>
                     </div>
                   </div>
@@ -844,7 +934,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {doc.lignes.map((l, i) => {
+                      {(doc.lignes || []).map((l, i) => {
                         const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
                         return (
                           <tr key={l.id} style={{ background: i % 2 === 0 ? "#FFF" : "#F7F7F7" }}>
@@ -856,8 +946,8 @@ export default function App() {
                           </tr>
                         );
                       })}
-                      {doc.lignes.length < 5 && Array.from({ length: Math.max(0, 3 - doc.lignes.length) }).map((_, i) => (
-                        <tr key={`e${i}`} style={{ background: (doc.lignes.length + i) % 2 === 0 ? "#FFF" : "#F7F7F7" }}>
+                      {(doc.lignes || []).length < 5 && Array.from({ length: Math.max(0, 3 - (doc.lignes || []).length) }).map((_, i) => (
+                        <tr key={`e${i}`} style={{ background: ((doc.lignes || []).length + i) % 2 === 0 ? "#FFF" : "#F7F7F7" }}>
                           {[...Array(5)].map((_, j) => <td key={j} style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", height: 26 }}>&nbsp;</td>)}
                         </tr>
                       ))}
