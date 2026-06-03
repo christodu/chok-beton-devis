@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { jsPDF } from "jspdf";
-import "jspdf-autotable";
+import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 
 // ─── CONSTANTES MÉTIER ───────────────────────────────────────────────────────
@@ -338,7 +338,7 @@ export default function App() {
       ];
     });
 
-    doc.autoTable({
+    autoTable(doc, {
       startY: y,
       head: [["Désignation", "Unité", "Quantité", "PU HT (€)", "Total HT (€)"]],
       body: tableRows,
@@ -356,7 +356,7 @@ export default function App() {
       theme: "grid",
     });
 
-    y = doc.lastAutoTable.finalY + 5;
+    y = (doc.lastAutoTable?.finalY || y) + 5;
 
     // À votre charge
     if (devis.a_votre_charge) {
