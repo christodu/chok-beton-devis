@@ -211,9 +211,260 @@ export default function App() {
     XLSX.writeFile(wb, `${nomFichierBase()}.xlsx`);
   };
 
-  const exporterPDF = () => {
+  const exporterPDF = async () => {
     if (!devis) return;
-    window.print();
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const W = 210;
+    const mL = 15, mR = 15, mT = 15;
+    let y = mT;
+
+    const gold = [232, 168, 56];
+    const noir = [26, 26, 26];
+    const gris = [120, 120, 120];
+    const grisClair = [248, 248, 248];
+
+    // Bande jaune haute
+    doc.setFillColor(...gold);
+    doc.rect(0, 0, W, 4, "F");
+    y = 8;
+
+    // Logo
+    try {
+      const logoUrl = LOGO_SRC;
+      const resp = await fetch(logoUrl);
+      const blob = await resp.blob();
+      const b64 = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+      doc.addImage(b64, "JPEG", mL, y, 30, 19);
+    } catch(e) {}
+
+    // Coordonnées société
+    doc.setFontSize(8);
+    doc.setTextColor(...gris);
+    doc.text(`${SOCIETE.adresse}, ${SOCIETE.cp_ville}`, mL + 33, y + 5);
+    doc.text(`Tél. ${SOCIETE.tel}`, mL + 33, y + 9);
+    doc.text(SOCIETE.web, mL + 33, y + 13);
+
+    // DEVIS + numéro
+    doc.setFontSize(26);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...noir);
+    doc.text("DEVIS", W - mR, y + 8, { align: "right" });
+    doc.setFontSize(13);
+    doc.setTextColor(...gold);
+    doc.text(devis.numero, W - mR, y + 15, { align: "right" });
+    doc.setFontSize(8);
+    doc.setTextColor(...gris);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Émis le ${new Date(devis.date).toLocaleDateString("fr-FR")}`, W - mR, y + 20, { align: "right" });
+    doc.text(`Validité : ${devis.validite} jours`, W - mR, y + 24, { align: "right" });
+
+    y += 30;
+
+    // Ligne séparatrice or
+    doc.setDrawColor(...gold);
+    doc.setLineWidth(0.5);
+    doc.line(mL, y, W - mR, y);
+    y += 4;
+
+    // Bandeau activités centré
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...noir);
+    doc.text("CHOK'BÉTON – Sciage & Découpe de Béton", W / 2, y, { align: "center" });
+    y += 4;
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...gris);
+    doc.text("Démolition au robot  ·  Renforcement de structure – métallique et carbone", W / 2, y, { align: "center" });
+    y += 7;
+
+    // Bloc Client / Chantier
+    const colW = (W - mL - mR - 4) / 2;
+    doc.setFillColor(...grisClair);
+    doc.rect(mL, y, colW, 16, "F");
+    doc.setFillColor(232, 168, 56);
+    doc.rect(mL, y, 1.5, 16, "F");
+    doc.rect(mL + colW + 4, y, colW, 16, "F");
+    doc.setFillColor(...grisClair);
+    doc.rect(mL + colW + 4, y, colW, 16, "F");
+
+    doc.setFontSize(7);
+    doc.setTextColor(...gris);
+    doc.text("CLIENT", mL + 3, y + 4);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...noir);
+    doc.text(devis.client || "—", mL + 3, y + 9);
+    if (devis.contact) { doc.setFontSize(8); doc.setFont("helvetica", "normal"); doc.setTextColor(...gris); doc.text(devis.contact, mL + 3, y + 13); }
+
+    doc.setFontSize(7);
+    doc.setTextColor(...gris);
+    doc.setFont("helvetica", "normal");
+    doc.text("CHANTIER", mL + colW + 6, y + 4);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...noir);
+    const chLines = doc.splitTextToSize(devis.chantier || "—", colW - 4);
+    doc.text(chLines, mL + colW + 6, y + 9);
+    y += 20;
+
+    // Objet
+    if (devis.objet) {
+      doc.setFillColor(255, 251, 242);
+      doc.setDrawColor(240, 216, 136);
+      doc.rect(mL, y, W - mL - mR, 8, "FD");
+      doc.setFillColor(...gold);
+      doc.rect(mL, y, 1.5, 8, "F");
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(184, 134, 26);
+      doc.text("Objet : ", mL + 3, y + 5);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(51, 51, 51);
+      doc.text(devis.objet, mL + 16, y + 5);
+      y += 11;
+    }
+
+    // Tableau prestations
+    const tableRows = devis.lignes.map(l => {
+      const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
+      return [
+        l.designation || "—",
+        l.unite || "—",
+        l.quantite || "—",
+        l.pu ? parseFloat(l.pu).toLocaleString("fr-FR", { minimumFractionDigits: 2 }) : "—",
+        m > 0 ? m.toLocaleString("fr-FR", { minimumFractionDigits: 2 }) : "—",
+      ];
+    });
+
+    doc.autoTable({
+      startY: y,
+      head: [["Désignation", "Unité", "Quantité", "PU HT (€)", "Total HT (€)"]],
+      body: tableRows,
+      margin: { left: mL, right: mR },
+      styles: { fontSize: 8.5, cellPadding: 2.5, lineColor: [238, 238, 238], lineWidth: 0.2 },
+      headStyles: { fillColor: noir, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8, halign: "left" },
+      columnStyles: {
+        0: { cellWidth: "auto", halign: "left" },
+        1: { cellWidth: 18, halign: "center" },
+        2: { cellWidth: 22, halign: "right" },
+        3: { cellWidth: 28, halign: "right" },
+        4: { cellWidth: 28, halign: "right", fontStyle: "bold" },
+      },
+      alternateRowStyles: { fillColor: [247, 247, 247] },
+      theme: "grid",
+    });
+
+    y = doc.lastAutoTable.finalY + 5;
+
+    // À votre charge
+    if (devis.a_votre_charge) {
+      doc.setFillColor(255, 251, 242);
+      doc.setDrawColor(240, 216, 136);
+      const avcLines = doc.splitTextToSize(devis.a_votre_charge, W - mL - mR - 8);
+      const avcH = avcLines.length * 4 + 8;
+      doc.rect(mL, y, W - mL - mR, avcH, "FD");
+      doc.setFillColor(...gold);
+      doc.rect(mL, y, 1.5, avcH, "F");
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(184, 134, 26);
+      doc.text("À VOTRE CHARGE", mL + 3, y + 4);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(85, 85, 85);
+      doc.setFontSize(8);
+      doc.text(avcLines, mL + 3, y + 8);
+      y += avcH + 4;
+    }
+
+    // Totaux
+    const totW = 70;
+    const totX = W - mR - totW;
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setDrawColor(232, 232, 232);
+    doc.setLineWidth(0.2);
+
+    doc.line(totX, y, W - mR, y);
+    doc.setTextColor(...gris);
+    doc.text("Total HT", totX + 2, y + 4);
+    doc.setTextColor(...noir);
+    doc.text(`${totalHT.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €`, W - mR - 2, y + 4, { align: "right" });
+    y += 6;
+
+    if (!devis.sans_tva) {
+      doc.line(totX, y, W - mR, y);
+      doc.setTextColor(...gris);
+      doc.text(`TVA ${devis.tva}%`, totX + 2, y + 4);
+      doc.setTextColor(...noir);
+      doc.text(`${totalTVA.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €`, W - mR - 2, y + 4, { align: "right" });
+      y += 6;
+    }
+
+    doc.setFillColor(...noir);
+    doc.rect(totX, y, totW, 8, "F");
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...gold);
+    doc.text(devis.sans_tva ? "TOTAL HT" : "TOTAL TTC", totX + 3, y + 5.5);
+    doc.text(`${(devis.sans_tva ? totalHT : totalTTC).toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €`, W - mR - 2, y + 5.5, { align: "right" });
+    y += 12;
+
+    // Conditions
+    if (devis.notes_bas) {
+      doc.setFillColor(...grisClair);
+      const condLines = doc.splitTextToSize(devis.notes_bas, W - mL - mR - 6);
+      const condH = condLines.length * 4 + 8;
+      doc.rect(mL, y, W - mL - mR, condH, "F");
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(68, 68, 68);
+      doc.text("CONDITIONS", mL + 3, y + 4);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(...gris);
+      doc.text(condLines, mL + 3, y + 8);
+      y += condH + 5;
+    }
+
+    // Signatures
+    const sigW = (W - mL - mR - 8) / 2;
+    doc.setDrawColor(220, 220, 220);
+    doc.setLineWidth(0.3);
+    doc.rect(mL, y, sigW, 22);
+    doc.rect(mL + sigW + 8, y, sigW, 22);
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(100, 100, 100);
+    doc.text("BON POUR ACCORD — SIGNATURE CLIENT", mL + 2, y + 4);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...gris);
+    doc.text("Date :", mL + 2, y + 8);
+
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(100, 100, 100);
+    doc.text("CHOK'BÉTON — Christopher Dupré", mL + sigW + 10, y + 4);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...gris);
+    doc.text("christopher@chok-beton.fr  ·  06 24 26 21 05", mL + sigW + 10, y + 8);
+    y += 28;
+
+    // Pied de page
+    const pageH = doc.internal.pageSize.height;
+    doc.setDrawColor(238, 238, 238);
+    doc.setLineWidth(0.2);
+    doc.line(mL, pageH - 12, W - mR, pageH - 12);
+    doc.setFontSize(6.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(180, 180, 180);
+    doc.text(`${SOCIETE.nom} · ${SOCIETE.forme} · ${SOCIETE.rcs}`, mL, pageH - 8);
+    doc.text(`SIRET ${SOCIETE.siret} · TVA ${SOCIETE.tva_intra}`, W - mR, pageH - 8, { align: "right" });
+
+    // Bande jaune basse
+    doc.setFillColor(...gold);
+    doc.rect(0, pageH - 3, W, 3, "F");
+
+    doc.save(`${nomFichierBase()}.pdf`);
   };
 
 
@@ -404,7 +655,7 @@ export default function App() {
                 <button onClick={() => setStep("formulaire")} style={btn("#999", true)}>← Modifier</button>
                 <button onClick={sauvegarder} style={btn("#27AE60")}>💾 Sauvegarder</button>
                 <button onClick={exporterXLSX} style={btn("#2980B9")}>📊 XLSX</button>
-                <button onClick={() => window.print()} style={btn("#E8A838")}>🖨️ PDF</button>
+                <button onClick={exporterPDF} style={btn("#E8A838")}>📄 PDF</button>
               </div>
             </div>
 
