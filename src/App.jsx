@@ -98,7 +98,7 @@ function LigneDevis({ ligne, index, onUpdate, onDelete }) {
   const montant = ligne.quantite && ligne.pu ? (parseFloat(ligne.quantite) * parseFloat(ligne.pu)).toFixed(2) : "";
   return (
     <div style={{ background: "#FFFFFF", border: "1px solid #E8E8E8", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 6, display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, alignItems: "start" }}>
-      <textarea placeholder="Ex : Carottages Ø150 – RDC voile béton armé 20cm..." value={ligne.designation} onChange={e => onUpdate(index, { designation: e.target.value })} rows={2} style={{ ...inp, resize: "vertical", minHeight: 56, lineHeight: 1.5 }} />
+      <textarea placeholder="Ex : Carottages Ø150 – RDC voile béton armé 20cm..." value={ligne.designation} onChange={e => onUpdate(index, { designation: e.target.value })} rows={2} spellCheck={true} lang="fr" style={{ ...inp, resize: "vertical", minHeight: 56, lineHeight: 1.5 }} />
       <select value={ligne.unite} onChange={e => onUpdate(index, { unite: e.target.value })} style={sel}>
         <option value="">Unité</option>
         {UNITES.map(u => <option key={u} value={u}>{u}</option>)}
@@ -567,7 +567,7 @@ export default function App() {
               </div>
               <div style={{ ...card, flex: 2, borderColor: "#E8A838", padding: "20px" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 700, color: "#E8A838", marginBottom: 10 }}>🤖 INTERPRÉTATION IA</div>
-                <textarea value={note} onChange={e => setNote(e.target.value)} placeholder={`Ex :\n• 10 carottages Ø150 au RDC\n• Sciage refend 20cm, 3×4m\n• Renforcement carbone S1512 - 12ml`} style={{ ...inp, minHeight: 140, resize: "vertical", lineHeight: 1.7 }} />
+                <textarea value={note} onChange={e => setNote(e.target.value)} placeholder={`Ex :\n• 10 carottages Ø150 au RDC\n• Sciage refend 20cm, 3×4m\n• Renforcement carbone S1512 - 12ml`} spellCheck={true} lang="fr" style={{ ...inp, minHeight: 140, resize: "vertical", lineHeight: 1.7 }} />
                 {erreur && <div style={{ background: "#FFF0F0", border: "1px solid #E07070", borderRadius: 6, padding: "8px 12px", margin: "10px 0", color: "#C0392B", fontSize: 12 }}>⚠️ {erreur}</div>}
                 <button onClick={lancerIA} disabled={loading || !note.trim()} style={{ ...btn("#E8A838"), marginTop: 10 }}>
                   {loading ? "⏳ Analyse..." : "🤖 Interpréter avec l'IA"}
@@ -590,7 +590,7 @@ export default function App() {
               <div><label style={lbl}>Client</label><input value={devis.client} onChange={e => setDevis(d => ({ ...d, client: e.target.value }))} style={inp} placeholder="Nom client / entreprise" /></div>
               <div><label style={lbl}>Chantier / Adresse</label><input value={devis.chantier} onChange={e => setDevis(d => ({ ...d, chantier: e.target.value }))} style={inp} placeholder="Adresse du chantier" /></div>
               <div><label style={lbl}>Contact</label><input value={devis.contact} onChange={e => setDevis(d => ({ ...d, contact: e.target.value }))} style={inp} placeholder="Nom contact" /></div>
-              <div style={{ gridColumn: "1/-1" }}><label style={lbl}>Objet des travaux</label><input value={devis.objet} onChange={e => setDevis(d => ({ ...d, objet: e.target.value }))} style={inp} placeholder="Description globale" /></div>
+              <div style={{ gridColumn: "1/-1" }}><label style={lbl}>Objet des travaux</label><input value={devis.objet} onChange={e => setDevis(d => ({ ...d, objet: e.target.value }))} style={inp} placeholder="Description globale" spellCheck={true} lang="fr" /></div>
             </div>
 
             {/* En-têtes colonnes */}
@@ -605,7 +605,7 @@ export default function App() {
             {/* À votre charge */}
             <div style={{ background: "#FFFBF2", border: "1px solid #F0D080", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
               <label style={{ ...lbl, color: "#B8861A" }}>À votre charge</label>
-              <textarea value={devis.a_votre_charge} onChange={e => setDevis(d => ({ ...d, a_votre_charge: e.target.value }))} placeholder="Ex : Accès chantier, évacuation des déchets, alimentation électrique..." style={{ ...inp, minHeight: 80, resize: "vertical", lineHeight: 1.6 }} />
+              <textarea value={devis.a_votre_charge} onChange={e => setDevis(d => ({ ...d, a_votre_charge: e.target.value }))} placeholder="Ex : Accès chantier, évacuation des déchets, alimentation électrique..." spellCheck={true} lang="fr" style={{ ...inp, minHeight: 80, resize: "vertical", lineHeight: 1.6 }} />
             </div>
 
             {/* Totaux */}
@@ -633,7 +633,7 @@ export default function App() {
               </div>
               <div style={{ marginTop: 16 }}>
                 <label style={lbl}>Notes / Conditions</label>
-                <textarea value={devis.notes_bas} onChange={e => setDevis(d => ({ ...d, notes_bas: e.target.value }))} style={{ ...inp, minHeight: 70, resize: "vertical" }} />
+                <textarea value={devis.notes_bas} onChange={e => setDevis(d => ({ ...d, notes_bas: e.target.value }))} spellCheck={true} lang="fr" style={{ ...inp, minHeight: 70, resize: "vertical" }} />
               </div>
             </div>
 
