@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
@@ -101,38 +102,40 @@ function nouveauDoc(type = "devis", base = null) {
   };
 }
 
-// ─── SUPABASE REST API (sans auth) ────────────────────────────────────────────
-const SB_URL = "https://vafdxhneykqervstkkew.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhZmR4aG5leWtxZXJ2c3Rra2N3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDgxODQsImV4cCI6MjA5NjA4NDE4NH0.Y-p9a22T94SMo4IfRjeV0CyeiNxmw5fTu1LNPzZkJho";
-const SB_HEADERS = { "Content-Type": "application/json", "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Prefer": "return=minimal" };
+// ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
+const supabase = createClient(
+  "https://vafdxhneykqervstkkcw.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhZmR4aG5leWtxZXJ2c3Rra2N3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDgxODQsImV4cCI6MjA5NjA4NDE4NH0.Y-p9a22T94SMo4IfRjeV0CyeiNxmw5fTu1LNPzZkJho"
+);
 
 async function fetchDocs() {
-  const r = await fetch(`${SB_URL}/rest/v1/documents?order=created_at.desc`, { headers: { ...SB_HEADERS, "Prefer": "return=representation" } });
-  if (!r.ok) throw new Error(await r.text());
-  return await r.json();
+  const { data, error } = await supabase
+    .from("documents")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
 }
 
 async function upsertDoc(doc) {
-  const payload = {
-    id: doc.id, user_id: "00000000-0000-0000-0000-000000000000",
+  const { error } = await supabase.from("documents").upsert({
+    id: doc.id,
+    user_id: "00000000-0000-0000-0000-000000000000",
     type_doc: doc.type_doc, numero: doc.numero, date: doc.date,
     validite: doc.validite, client: doc.client, chantier: doc.chantier,
     contact: doc.contact, email_client: doc.email_client || "",
     objet: doc.objet, lignes: doc.lignes, sans_tva: doc.sans_tva,
     tva: doc.tva, statut: doc.statut, date_envoi: doc.date_envoi || null,
     a_votre_charge: doc.a_votre_charge, notes_bas: doc.notes_bas,
-    devis_origine: doc.devis_origine || null, numero_situation: doc.numero_situation || null,
-  };
-  const r = await fetch(`${SB_URL}/rest/v1/documents`, {
-    method: "POST", headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates" },
-    body: JSON.stringify(payload)
-  });
-  if (!r.ok) throw new Error(await r.text());
+    devis_origine: doc.devis_origine || null,
+    numero_situation: doc.numero_situation || null,
+  }, { onConflict: "id" });
+  if (error) throw new Error(error.message);
 }
 
 async function deleteDoc(id) {
-  const r = await fetch(`${SB_URL}/rest/v1/documents?id=eq.${id}`, { method: "DELETE", headers: SB_HEADERS });
-  if (!r.ok) throw new Error(await r.text());
+  const { error } = await supabase.from("documents").delete().eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
