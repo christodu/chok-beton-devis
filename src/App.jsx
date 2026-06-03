@@ -178,8 +178,13 @@ export default function App() {
   };
 
   const nomFichierBase = () => {
-    const nomClient = (devis.client || "Client").replace(/\s+/g, "-").toUpperCase().slice(0, 20);
-    return `${devis.numero.replace(/\s/g, "_")}_${nomClient}_${devis.date}`;
+    // Format : 26.001 DUPONT 10 rue de la Paix Paris
+    const numero = devis.numero.replace("CDJ ", ""); // "26.001"
+    const client = (devis.client || "Client").trim().toUpperCase();
+    const chantier = (devis.chantier || "").trim();
+    const parts = [numero, client, chantier].filter(Boolean);
+    // Nettoyer les caractères interdits dans un nom de fichier
+    return parts.join(" ").replace(/[/\\:*?"<>|]/g, "-");
   };
 
   const exporterXLSX = () => {
