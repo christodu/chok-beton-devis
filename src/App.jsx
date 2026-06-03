@@ -17,6 +17,15 @@ const SOCIETE = {
 
 const LOGO_SRC = "/chok-beton-devis/logo.jpg";
 
+// ─── FORMATAGE NOMBRES ──────────────────────────────────────────────────────
+function formatMontant(val) {
+  if (!val && val !== 0) return "—";
+  return new Intl.NumberFormat("fr-FR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(val).replace(/ /g, " ").replace(/ /g, " ");
+}
+
 // ─── NUMÉROTATION ────────────────────────────────────────────────────────────
 function genererNumero() {
   const annee = String(new Date().getFullYear()).slice(-2);
@@ -338,8 +347,8 @@ export default function App() {
         l.designation || "—",
         l.unite || "—",
         l.quantite || "—",
-        l.pu ? parseFloat(l.pu).toLocaleString("fr-FR", { minimumFractionDigits: 2 }) : "—",
-        m > 0 ? m.toLocaleString("fr-FR", { minimumFractionDigits: 2 }) : "—",
+        l.pu ? formatMontant(parseFloat(l.pu)) : "—",
+        m > 0 ? formatMontant(m) : "—",
       ];
     });
 
@@ -354,8 +363,8 @@ export default function App() {
         0: { cellWidth: "auto", halign: "left" },
         1: { cellWidth: 18, halign: "center" },
         2: { cellWidth: 22, halign: "right" },
-        3: { cellWidth: 28, halign: "right" },
-        4: { cellWidth: 28, halign: "right", fontStyle: "bold" },
+        3: { cellWidth: 32, halign: "right" },
+        4: { cellWidth: 34, halign: "right", fontStyle: "bold" },
       },
       alternateRowStyles: { fillColor: [247, 247, 247] },
       theme: "grid",
@@ -395,7 +404,7 @@ export default function App() {
     doc.setTextColor(...gris);
     doc.text("Total HT", totX + 2, y + 4);
     doc.setTextColor(...noir);
-    doc.text(`${totalHT.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €`, W - mR - 2, y + 4, { align: "right" });
+    doc.text(`${formatMontant(totalHT)} €`, W - mR - 2, y + 4, { align: "right" });
     y += 6;
 
     if (!devis.sans_tva) {
@@ -403,7 +412,7 @@ export default function App() {
       doc.setTextColor(...gris);
       doc.text(`TVA ${devis.tva}%`, totX + 2, y + 4);
       doc.setTextColor(...noir);
-      doc.text(`${totalTVA.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €`, W - mR - 2, y + 4, { align: "right" });
+      doc.text(`${formatMontant(totalTVA)} €`, W - mR - 2, y + 4, { align: "right" });
       y += 6;
     }
 
@@ -413,7 +422,7 @@ export default function App() {
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...gold);
     doc.text(devis.sans_tva ? "TOTAL HT" : "TOTAL TTC", totX + 3, y + 5.5);
-    doc.text(`${(devis.sans_tva ? totalHT : totalTTC).toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €`, W - mR - 2, y + 5.5, { align: "right" });
+    doc.text(`${formatMontant(devis.sans_tva ? totalHT : totalTTC)} €`, W - mR - 2, y + 5.5, { align: "right" });
     y += 12;
 
     // Conditions
@@ -727,8 +736,8 @@ export default function App() {
                             <td style={{ padding: "8px 10px", borderBottom: "1px solid #EEE", fontSize: 10.5, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>{l.designation || "—"}</td>
                             <td style={{ padding: "8px 10px", borderBottom: "1px solid #EEE", textAlign: "center", fontSize: 10, fontWeight: 600 }}>{l.unite || "—"}</td>
                             <td style={{ padding: "8px 10px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10.5 }}>{l.quantite || "—"}</td>
-                            <td style={{ padding: "8px 10px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10.5 }}>{l.pu ? parseFloat(l.pu).toLocaleString("fr-FR", { minimumFractionDigits: 2 }) : "—"}</td>
-                            <td style={{ padding: "8px 10px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10.5, fontWeight: 600, color: m > 0 ? "#1A1A1A" : "#BBB" }}>{m > 0 ? m.toLocaleString("fr-FR", { minimumFractionDigits: 2 }) : "—"}</td>
+                            <td style={{ padding: "8px 10px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10.5 }}>{l.pu ? formatMontant(parseFloat(l.pu)) : "—"}</td>
+                            <td style={{ padding: "8px 10px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10.5, fontWeight: 600, color: m > 0 ? "#1A1A1A" : "#BBB" }}>{m > 0 ? formatMontant(m) : "—"}</td>
                           </tr>
                         );
                       })}
