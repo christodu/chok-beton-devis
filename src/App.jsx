@@ -94,7 +94,7 @@ function nouveauDoc(type = "devis", base = null) {
     objet: base?.objet || "",
     lignes: base?.lignes ? base.lignes.map(l => ({ ...l, id: Date.now() + Math.random() })) : [],
     sans_tva: base?.sans_tva || false, tva: base?.tva || 20,
-    statut: "brouillon", date_envoi: "", notes_statut: "",
+    statut: base?.type_doc === "devis" || !base ? "brouillon" : "brouillon", date_envoi: "", notes_statut: "",
     a_votre_charge: base?.a_votre_charge || AVC_DEFAUT,
     notes_bas: type === "facture" ? "Règlement à 45 jours fin de mois." : "Devis valable 30 jours. Paiement à 45 jours fin de mois.",
     devis_origine: base?.id || null,
@@ -119,7 +119,7 @@ const inp = { background: "#FFF", border: "1px solid #D0D0D0", borderRadius: 6, 
 const sel = { ...inp, cursor: "pointer" };
 const btn = (color = "#E8A838", outline = false) => ({
   background: outline ? "transparent" : color, border: `1.5px solid ${color}`,
-  color: outline ? color : color === "#E8A838" ? "#000" : "#FFF",
+  color: outline ? color : (color === "#E8A838" || color === "#999" || color === "#DDD") ? "#000" : "#FFF",
   borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700,
   cursor: "pointer", fontFamily: "'Barlow Condensed', sans-serif",
   letterSpacing: "0.05em", textTransform: "uppercase",
@@ -664,7 +664,7 @@ export default function App() {
         )}
 
         {/* ── FORMULAIRE ── */}
-        {step === "formulaire" && doc && (
+        {step === "formulaire" && doc && doc.type_doc && (
           <div>
             {/* Barre type + statut */}
             <div style={{ ...card, padding: "12px 20px", marginBottom: 16 }}>
@@ -674,7 +674,7 @@ export default function App() {
                 {doc.type_doc === "devis" && (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {Object.entries(STATUTS).map(([k, v]) => (
-                      <button key={k} onClick={() => setDoc(d => ({ ...d, statut: k }))} style={{ ...btn(v.color, doc.statut !== k), padding: "3px 10px", fontSize: 10 }}>{v.label}</button>
+                      <button key={k} onClick={() => setDoc(d => ({ ...d, statut: k }))} style={{ ...btn(v.color, (doc.statut || "brouillon") !== k), padding: "3px 10px", fontSize: 10 }}>{v.label}</button>
                     ))}
                   </div>
                 )}
