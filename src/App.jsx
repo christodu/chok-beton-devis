@@ -230,6 +230,7 @@ async function genererPDF(doc, totaux) {
     startY: y,
     head: [["Désignation", "Unité", "Quantité", "PU HT (€)", "Total HT (€)"]],
     body: (doc.lignes || []).map(l => {
+      if (l.type === "commentaire") return [{ content: l.designation || "", colSpan: 5, styles: { fontStyle: "italic", fillColor: [255, 251, 240], textColor: [90, 74, 26], fontStyle: "bold" } }];
       const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
       return [l.designation || "—", l.unite || "—", l.quantite || "—", l.pu ? formatMontant(parseFloat(l.pu)) : "—", m > 0 ? formatMontant(m) : "—"];
     }),
@@ -332,6 +333,24 @@ function StatCard({ label, value, sub, color = "#E8A838" }) {
 }
 function LigneDevis({ ligne, index, onUpdate, onDelete }) {
   const m = parseFloat(ligne.quantite || 0) * parseFloat(ligne.pu || 0);
+  const isCommentaire = ligne.type === "commentaire";
+
+  if (isCommentaire) {
+    return (
+      <div style={{ background: "#F8F6F0", border: "1px solid #E8D888", borderLeft: "4px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 6, display: "grid", gridTemplateColumns: "1fr 32px", gap: 8, alignItems: "start" }}>
+        <textarea
+          placeholder="Zone 1 — Découpe d'une paroi moulée en différents éléments..."
+          value={ligne.designation}
+          onChange={e => onUpdate(index, { designation: e.target.value })}
+          rows={2}
+          spellCheck lang="fr"
+          style={{ ...inp, resize: "vertical", minHeight: 48, lineHeight: 1.5, background: "#F8F6F0", fontWeight: 600, fontStyle: "italic", color: "#5A4A1A", border: "none", padding: "4px 6px" }}
+        />
+        <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
+      </div>
+    );
+  }
+
   return (
     <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 6, display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, alignItems: "start" }}>
       <textarea placeholder="Désignation..." value={ligne.designation} onChange={e => onUpdate(index, { designation: e.target.value })} rows={2} spellCheck lang="fr" style={{ ...inp, resize: "vertical", minHeight: 56, lineHeight: 1.5 }} />
@@ -414,6 +433,7 @@ export default function App() {
   const updateLigne = useCallback((i, p) => setDoc(d => { const l = [...d.lignes]; l[i] = { ...l[i], ...p }; return { ...d, lignes: l }; }), []);
   const deleteLigne = useCallback((i) => setDoc(d => ({ ...d, lignes: d.lignes.filter((_, j) => j !== i) })), []);
   const addLigne = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), designation: "", unite: "", quantite: "", pu: "" }] }));
+  const addCommentaire = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), type: "commentaire", designation: "", unite: "", quantite: "", pu: "" }] }));
 
   const creerDoc = (type = "devis") => { setDoc(nouveauDoc(type)); setNote(""); setStep("note"); };
   const ouvrirDoc = (d) => { setDoc(d); setStep("formulaire"); };
@@ -846,7 +866,10 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
             </div>
             {(doc.lignes || []).map((l, i) => <LigneDevis key={l.id} ligne={l} index={i} onUpdate={updateLigne} onDelete={deleteLigne} />)}
             {(doc.lignes || []).length === 0 && <div style={{ textAlign: "center", padding: "28px", color: "#BBB", border: "1px dashed #DDD", borderRadius: 10, marginBottom: 12 }}>Aucune ligne</div>}
-            <button onClick={addLigne} style={{ ...btn("#999", true), width: "100%", marginBottom: 16 }}>+ Ajouter une ligne</button>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <button onClick={addLigne} style={{ ...btn("#999", true), flex: 1 }}>+ Ajouter une ligne</button>
+              <button onClick={addCommentaire} style={{ ...btn("#E8A838", true), flex: 1 }}>+ Ligne explicative</button>
+            </div>
 
             {doc.type_doc === "devis" && (
               <div style={{ background: "#FFFBF2", border: "1px solid #F0D080", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
@@ -978,11 +1001,15 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
                         const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
                         return (
                           <tr key={l.id} style={{ background: i % 2 === 0 ? "#FFF" : "#F7F7F7" }}>
+                            {l.type === "commentaire" ? (
+                              <td colSpan={5} style={{ padding: "7px 10px", borderBottom: "1px solid #EEE", fontSize: 10, lineHeight: 1.4, fontWeight: 600, fontStyle: "italic", color: "#5A4A1A", background: "#FFFBF0", whiteSpace: "pre-wrap" }}>{l.designation || ""}</td>
+                            ) : (<>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", fontSize: 10, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>{l.designation || "—"}</td>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "center", fontSize: 9.5, fontWeight: 600 }}>{l.unite || "—"}</td>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10 }}>{l.quantite || "—"}</td>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10 }}>{l.pu ? formatMontant(parseFloat(l.pu)) : "—"}</td>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10, fontWeight: 600, color: m > 0 ? "#1A1A1A" : "#BBB" }}>{m > 0 ? formatMontant(m) : "—"}</td>
+                            </>)}
                           </tr>
                         );
                       })}
