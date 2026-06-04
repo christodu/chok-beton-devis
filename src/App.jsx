@@ -388,24 +388,37 @@ export default function App() {
   // Charger depuis localStorage au démarrage
   useEffect(() => {
     setListe(chargerDocs());
+    // Restaurer le token Drive si encore valide
+    const savedToken = localStorage.getItem("chok_drive_token");
+    const savedExpiry = parseInt(localStorage.getItem("chok_drive_expiry") || "0");
+    const savedFolder = localStorage.getItem("chok_drive_folder");
+    if (savedToken && savedExpiry > Date.now() && savedFolder) {
+      setDriveToken(savedToken);
+      setDriveFolderId(savedFolder);
+    }
     // Charger le script Google Identity Services
     const script = document.createElement("script");
     script.src = "https://accounts.google.com/gsi/client";
-    script.onload = () => initGoogleAuth();
+    script.onload = () => initGoogleAuth(savedToken, savedExpiry);
     document.head.appendChild(script);
   }, []);
 
-  const initGoogleAuth = () => {
+  const initGoogleAuth = (savedToken, savedExpiry) => {
     tokenClientRef.current = window.google?.accounts?.oauth2?.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
       scope: GOOGLE_SCOPES,
+      prompt: savedToken && savedExpiry > Date.now() ? "" : "consent",
       callback: async (response) => {
         if (response.access_token) {
           setDriveToken(response.access_token);
+          // Sauvegarder le token et son expiration (1h)
+          localStorage.setItem("chok_drive_token", response.access_token);
+          localStorage.setItem("chok_drive_expiry", String(Date.now() + 3500 * 1000));
           setDriveConnecting(true);
           try {
             const folderId = await getDriveFolderId(response.access_token);
             setDriveFolderId(folderId);
+            localStorage.setItem("chok_drive_folder", folderId);
             // Charger les données depuis Drive
             const driveData = await loadDriveData(response.access_token, folderId);
             if (driveData.length > 0) {
