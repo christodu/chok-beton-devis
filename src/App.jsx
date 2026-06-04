@@ -331,37 +331,56 @@ function StatCard({ label, value, sub, color = "#E8A838" }) {
     </div>
   );
 }
-function LigneDevis({ ligne, index, onUpdate, onDelete }) {
+function LigneDevis({ ligne, index, onUpdate, onDelete, onInsert, onInsertComment }) {
+  const [showInsert, setShowInsert] = useState(false);
   const m = parseFloat(ligne.quantite || 0) * parseFloat(ligne.pu || 0);
   const isCommentaire = ligne.type === "commentaire";
 
+  const InsertBar = () => (
+    <div
+      style={{ height: 20, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: showInsert ? 1 : 0, transition: "opacity 0.15s", marginBottom: 2 }}
+      onMouseEnter={() => setShowInsert(true)}
+      onMouseLeave={() => setShowInsert(false)}
+    >
+      <div style={{ flex: 1, height: 1, background: "#E8A838" }} />
+      <button onClick={() => onInsert(index)} style={{ background: "#E8A838", border: "none", color: "#000", borderRadius: 10, padding: "1px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ ligne</button>
+      <button onClick={() => onInsertComment(index)} style={{ background: "#FFF", border: "1px solid #E8A838", color: "#B8861A", borderRadius: 10, padding: "1px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ explicative</button>
+      <div style={{ flex: 1, height: 1, background: "#E8A838" }} />
+    </div>
+  );
+
   if (isCommentaire) {
     return (
-      <div style={{ background: "#F8F6F0", border: "1px solid #E8D888", borderLeft: "4px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 6, display: "grid", gridTemplateColumns: "1fr 32px", gap: 8, alignItems: "start" }}>
-        <textarea
-          placeholder="Zone 1 — Découpe d'une paroi moulée en différents éléments..."
-          value={ligne.designation}
-          onChange={e => onUpdate(index, { designation: e.target.value })}
-          rows={2}
-          spellCheck lang="fr"
-          style={{ ...inp, resize: "vertical", minHeight: 48, lineHeight: 1.5, background: "#F8F6F0", fontWeight: 600, fontStyle: "italic", color: "#5A4A1A", border: "none", padding: "4px 6px" }}
-        />
-        <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
+      <div onMouseEnter={() => setShowInsert(true)} onMouseLeave={() => setShowInsert(false)}>
+        <div style={{ background: "#F8F6F0", border: "1px solid #E8D888", borderLeft: "4px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 0, display: "grid", gridTemplateColumns: "1fr 32px", gap: 8, alignItems: "start" }}>
+          <textarea
+            placeholder="Zone 1 — Découpe d'une paroi moulée en différents éléments..."
+            value={ligne.designation}
+            onChange={e => onUpdate(index, { designation: e.target.value })}
+            rows={2} spellCheck lang="fr"
+            style={{ ...inp, resize: "vertical", minHeight: 48, lineHeight: 1.5, background: "#F8F6F0", fontWeight: 600, fontStyle: "italic", color: "#5A4A1A", border: "none", padding: "4px 6px" }}
+          />
+          <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
+        </div>
+        <InsertBar />
       </div>
     );
   }
 
   return (
-    <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 6, display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, alignItems: "start" }}>
-      <textarea placeholder="Désignation..." value={ligne.designation} onChange={e => onUpdate(index, { designation: e.target.value })} rows={2} spellCheck lang="fr" style={{ ...inp, resize: "vertical", minHeight: 56, lineHeight: 1.5 }} />
-      <select value={ligne.unite} onChange={e => onUpdate(index, { unite: e.target.value })} style={sel}>
-        <option value="">Unité</option>
-        {UNITES.map(u => <option key={u} value={u}>{u}</option>)}
-      </select>
-      <input type="number" placeholder="Qté" value={ligne.quantite} onChange={e => onUpdate(index, { quantite: e.target.value })} style={{ ...inp, textAlign: "right" }} />
-      <input type="number" placeholder="PU HT" value={ligne.pu} onChange={e => onUpdate(index, { pu: e.target.value })} style={{ ...inp, textAlign: "right" }} />
-      <div style={{ color: m > 0 ? "#E8A838" : "#CCC", fontSize: 13, fontWeight: 700, textAlign: "right", paddingTop: 8 }}>{m > 0 ? `${formatMontant(m)} €` : "—"}</div>
-      <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
+    <div onMouseEnter={() => setShowInsert(true)} onMouseLeave={() => setShowInsert(false)}>
+      <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 0, display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, alignItems: "start" }}>
+        <textarea placeholder="Désignation..." value={ligne.designation} onChange={e => onUpdate(index, { designation: e.target.value })} rows={2} spellCheck lang="fr" style={{ ...inp, resize: "vertical", minHeight: 56, lineHeight: 1.5 }} />
+        <select value={ligne.unite} onChange={e => onUpdate(index, { unite: e.target.value })} style={sel}>
+          <option value="">Unité</option>
+          {UNITES.map(u => <option key={u} value={u}>{u}</option>)}
+        </select>
+        <input type="number" placeholder="Qté" value={ligne.quantite} onChange={e => onUpdate(index, { quantite: e.target.value })} style={{ ...inp, textAlign: "right" }} />
+        <input type="number" placeholder="PU HT" value={ligne.pu} onChange={e => onUpdate(index, { pu: e.target.value })} style={{ ...inp, textAlign: "right" }} />
+        <div style={{ color: m > 0 ? "#E8A838" : "#CCC", fontSize: 13, fontWeight: 700, textAlign: "right", paddingTop: 8 }}>{m > 0 ? `${formatMontant(m)} €` : "—"}</div>
+        <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
+      </div>
+      <InsertBar />
     </div>
   );
 }
@@ -447,6 +466,16 @@ export default function App() {
   const deleteLigne = useCallback((i) => setDoc(d => ({ ...d, lignes: d.lignes.filter((_, j) => j !== i) })), []);
   const addLigne = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), designation: "", unite: "", quantite: "", pu: "" }] }));
   const addCommentaire = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), type: "commentaire", designation: "", unite: "", quantite: "", pu: "" }] }));
+  const insertLigne = (index) => setDoc(d => {
+    const lignes = [...d.lignes];
+    lignes.splice(index + 1, 0, { id: Date.now(), designation: "", unite: "", quantite: "", pu: "" });
+    return { ...d, lignes };
+  });
+  const insertCommentaire = (index) => setDoc(d => {
+    const lignes = [...d.lignes];
+    lignes.splice(index + 1, 0, { id: Date.now(), type: "commentaire", designation: "", unite: "", quantite: "", pu: "" });
+    return { ...d, lignes };
+  });
 
   const creerDoc = (type = "devis") => { setDoc(nouveauDoc(type)); setNote(""); setStep("note"); };
   const ouvrirDoc = (d) => { setDoc(d); setStep("formulaire"); };
@@ -877,7 +906,11 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
             <div style={{ display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, padding: "0 12px", marginBottom: 6, fontSize: 10, color: "#666", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 600 }}>
               <span>Désignation</span><span>Unité</span><span style={{ textAlign: "right" }}>Quantité</span><span style={{ textAlign: "right" }}>PU HT €</span><span style={{ textAlign: "right" }}>Total HT €</span><span />
             </div>
-            {(doc.lignes || []).map((l, i) => <LigneDevis key={l.id} ligne={l} index={i} onUpdate={updateLigne} onDelete={deleteLigne} />)}
+            {(doc.lignes || []).map((l, i) => (
+              <div key={l.id}>
+                <LigneDevis ligne={l} index={i} onUpdate={updateLigne} onDelete={deleteLigne} onInsert={insertLigne} onInsertComment={insertCommentaire} />
+              </div>
+            ))}
             {(doc.lignes || []).length === 0 && <div style={{ textAlign: "center", padding: "28px", color: "#BBB", border: "1px dashed #DDD", borderRadius: 10, marginBottom: 12 }}>Aucune ligne</div>}
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
               <button onClick={addLigne} style={{ ...btn("#999", true), flex: 1 }}>+ Ajouter une ligne</button>
