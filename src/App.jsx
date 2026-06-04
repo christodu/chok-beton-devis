@@ -284,76 +284,76 @@ async function genererPDF(doc, totaux) {
   // S'assurer qu'on est sur la dernière page après autoTable
   pdf.setPage(pdf.internal.getNumberOfPages());
 
+
+
+  // ── HAUTEUR UTILE PAR PAGE (sous l'en-tête, au-dessus du pied) ──
+  const pH = 297; // A4 mm
+  const pFooter = pH - 18; // Zone pied de page réservée
+
+  // Fonction utilitaire : saut de page si pas assez de place
+  const checkPage = (needed) => {
+    if (y + needed > pFooter) {
+      pdf.addPage();
+      pdf.setFillColor(...gold); pdf.rect(0, 0, W, 4, "F");
+      y = 14;
+    }
+  };
+
+  // ── À VOTRE CHARGE ──
   if (doc.a_votre_charge && doc.type_doc === "devis") {
-    pdf.setFillColor(255, 251, 242); pdf.setDrawColor(240, 216, 136);
     const lines = pdf.splitTextToSize(doc.a_votre_charge, W - mL - mR - 8);
-    const h = lines.length * 4 + 8;
+    const h = lines.length * 4 + 10;
+    checkPage(h + 4);
+    pdf.setFillColor(255, 251, 242); pdf.setDrawColor(240, 216, 136);
     pdf.rect(mL, y, W - mL - mR, h, "FD");
     pdf.setFillColor(...gold); pdf.rect(mL, y, 1.5, h, "F");
     pdf.setFontSize(7); pdf.setFont("helvetica", "bold"); pdf.setTextColor(184, 134, 26);
     pdf.text("À VOTRE CHARGE", mL + 3, y + 4);
     pdf.setFont("helvetica", "normal"); pdf.setTextColor(85, 85, 85); pdf.setFontSize(8);
     pdf.text(lines, mL + 3, y + 8);
-    y += h + 4;
+    y += h + 5;
   }
 
+  // ── TOTAUX ──
   const totW = 75, totX = W - mR - totW;
-  pdf.setFontSize(9); pdf.setFont("helvetica", "normal"); pdf.setDrawColor(232, 232, 232); pdf.setLineWidth(0.2);
-  pdf.line(totX, y, W - mR, y); pdf.setTextColor(...gris); pdf.text("Total HT", totX + 2, y + 4);
-  pdf.setTextColor(...noir); pdf.text(`${formatMontant(totaux.ht)} €`, W - mR - 2, y + 4, { align: "right" }); y += 6;
+  checkPage(30);
+  pdf.setFontSize(9); pdf.setFont("helvetica", "normal");
+  pdf.setDrawColor(232, 232, 232); pdf.setLineWidth(0.2);
+  pdf.line(totX, y, W - mR, y);
+  pdf.setTextColor(...gris); pdf.text("Total HT", totX + 2, y + 4);
+  pdf.setTextColor(...noir); pdf.text(`${formatMontant(totaux.ht)} €`, W - mR - 2, y + 4, { align: "right" });
+  y += 6;
   if (!doc.sans_tva) {
-    pdf.line(totX, y, W - mR, y); pdf.setTextColor(...gris); pdf.text(`TVA ${doc.tva}%`, totX + 2, y + 4);
-    pdf.setTextColor(...noir); pdf.text(`${formatMontant(totaux.tva)} €`, W - mR - 2, y + 4, { align: "right" }); y += 6;
+    pdf.line(totX, y, W - mR, y);
+    pdf.setTextColor(...gris); pdf.text(`TVA ${doc.tva}%`, totX + 2, y + 4);
+    pdf.setTextColor(...noir); pdf.text(`${formatMontant(totaux.tva)} €`, W - mR - 2, y + 4, { align: "right" });
+    y += 6;
   }
   pdf.setFillColor(...noir); pdf.rect(totX, y, totW, 8, "F");
   pdf.setFontSize(10); pdf.setFont("helvetica", "bold"); pdf.setTextColor(...gold);
   pdf.text(doc.sans_tva ? "TOTAL HT" : "TOTAL TTC", totX + 3, y + 5.5);
-  pdf.text(`${formatMontant(doc.sans_tva ? totaux.ht : totaux.ttc)} €`, W - mR - 2, y + 5.5, { align: "right" }); y += 12;
+  pdf.text(`${formatMontant(doc.sans_tva ? totaux.ht : totaux.ttc)} €`, W - mR - 2, y + 5.5, { align: "right" });
+  y += 12;
 
+  // ── CONDITIONS ──
   if (doc.notes_bas) {
-    pdf.setFillColor(...grisC);
     const cl = pdf.splitTextToSize(doc.notes_bas, W - mL - mR - 6);
-    const ch = cl.length * 4 + 8;
+    const ch = cl.length * 4 + 10;
+    checkPage(ch + 4);
+    pdf.setFillColor(...grisC);
     pdf.rect(mL, y, W - mL - mR, ch, "F");
     pdf.setFontSize(7); pdf.setFont("helvetica", "bold"); pdf.setTextColor(68, 68, 68);
     pdf.text("CONDITIONS", mL + 3, y + 4);
     pdf.setFont("helvetica", "normal"); pdf.setTextColor(...gris);
-    pdf.text(cl, mL + 3, y + 8); y += ch + 5;
+    pdf.text(cl, mL + 3, y + 8);
+    y += ch + 5;
   }
 
-  // ── PIED DE PAGE SUR TOUTES LES PAGES ──
-  const totalPages = pdf.internal.getNumberOfPages();
-  for (let p = 1; p <= totalPages; p++) {
-    pdf.setPage(p);
-    const pH = pdf.internal.pageSize.height;
-    // Bande dorée basse
-    pdf.setFillColor(...gold); pdf.rect(0, pH - 3, W, 3, "F");
-    // Séparateur pied
-    pdf.setDrawColor(238, 238, 238); pdf.setLineWidth(0.2);
-    pdf.line(mL, pH - 12, W - mR, pH - 12);
-    // Mentions légales
-    pdf.setFontSize(6.5); pdf.setFont("helvetica", "normal"); pdf.setTextColor(180, 180, 180);
-    pdf.text(`${SOCIETE.nom} · ${SOCIETE.forme} · ${SOCIETE.rcs}`, mL, pH - 8);
-    pdf.text(`SIRET ${SOCIETE.siret} · TVA ${SOCIETE.tva_intra}`, W - mR, pH - 8, { align: "right" });
-    // Numéro de page si plusieurs pages
-    if (totalPages > 1) {
-      pdf.text(`Page ${p} / ${totalPages}`, W / 2, pH - 8, { align: "center" });
-    }
-  }
-
-  // ── SIGNATURES + TOTAUX SUR LA DERNIÈRE PAGE ──
-  pdf.setPage(totalPages);
-  const pHLast = pdf.internal.pageSize.height;
-  // Vérifier qu'il y a assez de place, sinon ajouter une page
-  if (y > pHLast - 60) {
-    pdf.addPage();
-    pdf.setFillColor(...gold); pdf.rect(0, 0, W, 4, "F");
-    y = 20;
-  }
-
+  // ── SIGNATURES ── (toujours ensemble, jamais coupées)
+  checkPage(30);
   const sigW = (W - mL - mR - 8) / 2;
   pdf.setDrawColor(220, 220, 220); pdf.setLineWidth(0.3);
-  pdf.rect(mL, y, sigW, 22); pdf.rect(mL + sigW + 8, y, sigW, 22);
+  pdf.rect(mL, y, sigW, 24); pdf.rect(mL + sigW + 8, y, sigW, 24);
   pdf.setFontSize(7); pdf.setFont("helvetica", "bold"); pdf.setTextColor(100, 100, 100);
   pdf.text(doc.type_doc === "devis" ? "BON POUR ACCORD — SIGNATURE CLIENT" : "SIGNATURE CLIENT", mL + 2, y + 4);
   pdf.setFont("helvetica", "normal"); pdf.setTextColor(...gris); pdf.text("Date :", mL + 2, y + 8);
@@ -361,6 +361,21 @@ async function genererPDF(doc, totaux) {
   pdf.text("CHOK'BÉTON — Christopher Dupré", mL + sigW + 10, y + 4);
   pdf.setFont("helvetica", "normal"); pdf.setTextColor(...gris);
   pdf.text("christopher@chok-beton.fr  ·  06 24 26 21 05", mL + sigW + 10, y + 8);
+  y += 28;
+
+  // ── PIED DE PAGE SUR TOUTES LES PAGES ──
+  const totalPages = pdf.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    pdf.setPage(p);
+    const pageH = pdf.internal.pageSize.height;
+    pdf.setFillColor(...gold); pdf.rect(0, pageH - 3, W, 3, "F");
+    pdf.setDrawColor(238, 238, 238); pdf.setLineWidth(0.2);
+    pdf.line(mL, pageH - 12, W - mR, pageH - 12);
+    pdf.setFontSize(6.5); pdf.setFont("helvetica", "normal"); pdf.setTextColor(180, 180, 180);
+    pdf.text(`${SOCIETE.nom} · ${SOCIETE.forme} · ${SOCIETE.rcs}`, mL, pageH - 8);
+    pdf.text(`SIRET ${SOCIETE.siret} · TVA ${SOCIETE.tva_intra}`, W - mR, pageH - 8, { align: "right" });
+    if (totalPages > 1) pdf.text(`Page ${p} / ${totalPages}`, W / 2, pageH - 8, { align: "center" });
+  }
 
   return pdf;
 }
