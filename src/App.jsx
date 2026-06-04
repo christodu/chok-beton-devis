@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
 const UNITES = ["cml", "ml", "m²", "U", "Forfait", "Ens"];
-const PROXY_URL = "";
+const PROXY_URL = "https://falling-pond-c505.chokbeton-rapport.workers.dev/";
 
 const STATUTS = {
   brouillon: { label: "Brouillon", color: "#999",    bg: "#F5F5F5" },
@@ -120,7 +120,6 @@ async function fetchDocs() {
 async function upsertDoc(doc) {
   const { error } = await supabase.from("documents").upsert({
     id: doc.id,
-    user_id: "00000000-0000-0000-0000-000000000000",
     type_doc: doc.type_doc, numero: doc.numero, date: doc.date,
     validite: doc.validite, client: doc.client, chantier: doc.chantier,
     contact: doc.contact, email_client: doc.email_client || "",
