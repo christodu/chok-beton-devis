@@ -8,7 +8,7 @@ const UNITES = ["cml", "ml", "m²", "U", "Forfait", "Ens"];
 const PROXY_URL = "https://falling-pond-c505.chokbeton-rapport.workers.dev/";
 const GOOGLE_CLIENT_ID = "670631341999-79lp6oseq17kio1vp66f79g3n533vvam.apps.googleusercontent.com";
 const GOOGLE_SCOPES = "https://www.googleapis.com/auth/drive.file";
-const DRIVE_FOLDER_NAME = "CHOK'BÉTON — Devis";
+const DRIVE_FOLDER_NAME = "DEVIS Christopher";
 
 const STATUTS = {
   brouillon: { label: "Brouillon", color: "#999",    bg: "#F5F5F5" },
@@ -103,6 +103,22 @@ async function getDriveFolderId(token) {
   return folder.id;
 }
 
+async function getOrCreateSubFolder(token, parentId, folderName) {
+  const search = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(folderName)}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id)`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await search.json();
+  if (data.files?.length > 0) return data.files[0].id;
+  const create = await fetch("https://www.googleapis.com/drive/v3/files", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: folderName, mimeType: "application/vnd.google-apps.folder", parents: [parentId] })
+  });
+  const folder = await create.json();
+  return folder.id;
+}
+
 async function uploadToDrive(token, folderId, fileName, content, mimeType) {
   // Chercher si le fichier existe déjà
   const search = await fetch(
@@ -123,6 +139,21 @@ async function uploadToDrive(token, folderId, fileName, content, mimeType) {
 
   const resp = await fetch(url, { method, headers: { Authorization: `Bearer ${token}` }, body: form });
   return await resp.json();
+}
+
+async function sauvegarderDevisSurDrive(token, rootFolderId, doc, pdfBytes) {
+  const num = doc.numero.replace(/CDJ |FAC |SIT /, "");
+  const cli = (doc.client || "Client").trim().toUpperCase().slice(0, 20);
+  const chan = (doc.chantier || "").trim().slice(0, 30);
+  const folderName = [num, cli, chan].filter(Boolean).join(" ").replace(/[/\\:*?"<>|]/g, "-");
+  const subFolderId = await getOrCreateSubFolder(token, rootFolderId, folderName);
+  const baseName = folderName;
+  // Sauvegarder PDF
+  if (pdfBytes) await uploadToDrive(token, subFolderId, `${baseName}.pdf`, pdfBytes, "application/pdf");
+  // Sauvegarder JSON
+  const json = JSON.stringify(doc, null, 2);
+  await uploadToDrive(token, subFolderId, `${baseName}.json`, json, "application/json");
+  return folderName;
 }
 
 async function saveDriveData(token, folderId, liste) {
@@ -562,22 +593,44 @@ export default function App() {
   const exporterPDF = async () => {
     if (!doc) return;
     const pdf = await genererPDF(doc, totaux);
-    const nom = `${nomFichier()}.pdf`;
+    pdf.save(`${nomFichier()}.pdf`);
+  };
 
-    if (driveToken && driveFolderId) {
-      // Upload sur Google Drive
-      try {
-        showToast("⏳ Envoi vers Google Drive...");
-        const pdfBytes = pdf.output("arraybuffer");
-        await uploadToDrive(driveToken, driveFolderId, nom, pdfBytes, "application/pdf");
-        showToast(`✅ PDF sauvegardé sur Drive : ${nom}`);
-      } catch(e) {
-        showToast("⚠️ Erreur Drive — téléchargement local");
-        pdf.save(nom);
-      }
-    } else {
-      pdf.save(nom);
+  const imprimerPDF = async () => {
+    if (!doc) return;
+    const pdf = await genererPDF(doc, totaux);
+    const blob = new Blob([pdf.output("arraybuffer")], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const iframe = document.createElement("iframe");
+    iframe.style.display = "none";
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    iframe.onload = () => {
+      iframe.contentWindow.print();
+      setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(url); }, 2000);
+    };
+  };
+
+  const sauvegarderSurDrive = async () => {
+    if (!doc) return;
+    if (!driveToken || !driveFolderId) {
+      showToast("⚠️ Connectez Google Drive d'abord");
+      return;
     }
+    setSaving(true);
+    try {
+      showToast("⏳ Sauvegarde sur Drive...");
+      const pdf = await genererPDF(doc, totaux);
+      const pdfBytes = pdf.output("arraybuffer");
+      const folderName = await sauvegarderDevisSurDrive(driveToken, driveFolderId, doc, pdfBytes);
+      // Sauvegarder aussi les données globales
+      const nouvelleListe = liste.find(d => d.id === doc.id) ? liste.map(d => d.id === doc.id ? { ...doc, updatedAt: new Date().toISOString() } : d) : [{ ...doc }, ...liste];
+      await saveDriveData(driveToken, driveFolderId, nouvelleListe);
+      showToast(`✅ Sauvegardé sur Drive : ${folderName}`);
+    } catch(e) {
+      showToast("❌ Erreur Drive : " + e.message);
+    }
+    setSaving(false);
   };
 
   const exporterXLSX = async () => {
@@ -959,8 +1012,11 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
               <button onClick={() => sauvegarder()} disabled={saving} style={{ ...btn("#27AE60"), opacity: saving ? 0.7 : 1 }}>
                 {saving ? "⏳" : "💾"} Sauvegarder
               </button>
+              <button onClick={exporterPDF} style={btn("#E8A838")}>📄 PDF</button>
+              <button onClick={imprimerPDF} style={btn("#1A1A1A")}>🖨️ Imprimer</button>
+              <button onClick={sauvegarderSurDrive} disabled={saving} style={{ ...btn("#4285F4"), opacity: saving ? 0.7 : 1 }}>☁️ Drive</button>
               <button onClick={exporterXLSX} style={btn("#2980B9")}>📊 XLSX</button>
-              <button onClick={() => setStep("apercu")} style={btn("#E8A838")}>👁 Aperçu PDF</button>
+              <button onClick={() => setStep("apercu")} style={btn("#999", true)}>👁 Aperçu</button>
               <button onClick={envoyerMail} style={btn("#E67E22")}>📧 Envoyer</button>
               <button onClick={() => setStep(liste.length > 0 ? "liste" : "dashboard")} style={btn("#999", true)}>← Retour</button>
             </div>
@@ -989,10 +1045,10 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => setStep("formulaire")} style={btn("#999", true)}>← Modifier</button>
                 <button onClick={() => sauvegarder()} style={btn("#27AE60")}>💾</button>
+                <button onClick={exporterPDF} style={btn("#E8A838")}>📄 PDF</button>
+                <button onClick={imprimerPDF} style={btn("#1A1A1A")}>🖨️ Imprimer</button>
+                <button onClick={sauvegarderSurDrive} disabled={saving} style={{ ...btn("#4285F4"), opacity: saving ? 0.7 : 1 }}>☁️ Drive</button>
                 <button onClick={exporterXLSX} style={btn("#2980B9")}>📊 XLSX</button>
-                <button onClick={exporterPDF} style={btn("#E8A838")}>
-                  {driveToken ? "📄 PDF → Drive" : "📄 PDF"}
-                </button>
                 <button onClick={envoyerMail} style={btn("#E67E22")}>📧 Mail</button>
               </div>
             </div>
