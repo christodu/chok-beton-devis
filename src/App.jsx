@@ -1,13 +1,15 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 
-
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
 const UNITES = ["cml", "ml", "m²", "U", "Forfait", "Ens"];
 const PROXY_URL = "https://falling-pond-c505.chokbeton-rapport.workers.dev/";
+const GOOGLE_CLIENT_ID = "670631341999-79lp6oseq17kio1vp66f79g3n533vvam.apps.googleusercontent.com";
+const GOOGLE_SCOPES = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_FOLDER_NAME = "CHOK'BÉTON — Devis";
 
 const STATUTS = {
   brouillon: { label: "Brouillon", color: "#999",    bg: "#F5F5F5" },
@@ -32,6 +34,7 @@ const SOCIETE = {
   web: "www.chok-beton.fr", forme: "SA au capital de 645 027 €",
 };
 const LOGO_SRC = "/chok-beton-devis/logo.jpg";
+const STORAGE_KEY = "chok_beton_documents";
 
 // ─── UTILITAIRES ──────────────────────────────────────────────────────────────
 function formatMontant(val) {
@@ -39,7 +42,6 @@ function formatMontant(val) {
   return new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     .format(val).replace(/\u202f/g, " ").replace(/\u00a0/g, " ");
 }
-
 function statutDoc(doc) {
   if (!doc) return "brouillon";
   if (doc.type_doc !== "devis") return doc.statut || "brouillon";
@@ -49,17 +51,23 @@ function statutDoc(doc) {
   if (new Date() > exp) return "expire";
   return doc.statut || "brouillon";
 }
-
 function joursRestants(doc) {
   const exp = new Date(doc.date);
   exp.setDate(exp.getDate() + parseInt(doc.validite || 30));
   return Math.ceil((exp - new Date()) / 86400000);
 }
-
 function calcTotaux(doc) {
   const ht = (doc.lignes || []).reduce((s, l) => s + (parseFloat(l.quantite || 0) * parseFloat(l.pu || 0)), 0);
   const tva = doc.sans_tva ? 0 : ht * ((doc.tva || 20) / 100);
   return { ht, tva, ttc: ht + tva };
+}
+
+// ─── STORAGE LOCAL ────────────────────────────────────────────────────────────
+function chargerDocs() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
+}
+function sauvegarderLocal(liste) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(liste));
 }
 
 // ─── NUMÉROTATION ─────────────────────────────────────────────────────────────
@@ -76,117 +84,85 @@ function genererNumero(type = "devis") {
   return `${prefix} ${annee}.${String(n).padStart(3, "0")}`;
 }
 
+// ─── GOOGLE DRIVE API ─────────────────────────────────────────────────────────
+async function getDriveFolderId(token) {
+  // Chercher le dossier existant
+  const search = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id,name)`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await search.json();
+  if (data.files && data.files.length > 0) return data.files[0].id;
+
+  // Créer le dossier s'il n'existe pas
+  const create = await fetch("https://www.googleapis.com/drive/v3/files", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" })
+  });
+  const folder = await create.json();
+  return folder.id;
+}
+
+async function uploadToDrive(token, folderId, fileName, content, mimeType) {
+  // Chercher si le fichier existe déjà
+  const search = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=name='${fileName}' and '${folderId}' in parents and trashed=false&fields=files(id)`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const existing = await search.json();
+
+  const metadata = { name: fileName, parents: existing.files?.length ? undefined : [folderId] };
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+  form.append("file", new Blob([content], { type: mimeType }));
+
+  const method = existing.files?.length ? "PATCH" : "POST";
+  const url = existing.files?.length
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existing.files[0].id}?uploadType=multipart`
+    : "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
+
+  const resp = await fetch(url, { method, headers: { Authorization: `Bearer ${token}` }, body: form });
+  return await resp.json();
+}
+
+async function saveDriveData(token, folderId, liste) {
+  const json = JSON.stringify(liste, null, 2);
+  await uploadToDrive(token, folderId, "devis-data.json", json, "application/json");
+}
+
+async function loadDriveData(token, folderId) {
+  const search = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=name='devis-data.json' and '${folderId}' in parents and trashed=false&fields=files(id)`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await search.json();
+  if (!data.files?.length) return [];
+  const file = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${data.files[0].id}?alt=media`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return await file.json();
+}
+
 // ─── NOUVEAU DOC ──────────────────────────────────────────────────────────────
 function nouveauDoc(type = "devis", base = null) {
   const now = new Date().toISOString();
   return {
-    id: Date.now(),
-    type_doc: type,
-    numero: genererNumero(type),
-    date: now.split("T")[0],
-    validite: 30,
-    client: base?.client || "",
-    chantier: base?.chantier || "",
-    contact: base?.contact || "",
-    email_client: base?.email_client || "",
+    id: Date.now(), type_doc: type, numero: genererNumero(type),
+    date: now.split("T")[0], validite: 30,
+    client: base?.client || "", chantier: base?.chantier || "",
+    contact: base?.contact || "", email_client: base?.email_client || "",
     objet: base?.objet || "",
     lignes: base?.lignes ? base.lignes.map(l => ({ ...l, id: Date.now() + Math.random() })) : [],
-    sans_tva: base?.sans_tva || false,
-    tva: base?.tva || 20,
-    statut: "brouillon",
-    date_envoi: null,
+    sans_tva: base?.sans_tva || false, tva: base?.tva || 20,
+    statut: "brouillon", date_envoi: null,
     a_votre_charge: base?.a_votre_charge || AVC_DEFAUT,
     notes_bas: type === "facture" ? "Règlement à 45 jours fin de mois." : "Devis valable 30 jours. Paiement à 45 jours fin de mois.",
     devis_origine: base?.id || null,
     numero_situation: type === "situation" ? 1 : null,
+    createdAt: now, updatedAt: now,
   };
-}
-
-// ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
-const supabase = createClient(
-  "https://vafdxhneykqervstkkcw.supabase.co",
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhZmR4aG5leWtxZXJ2c3Rra2N3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDgxODQsImV4cCI6MjA5NjA4NDE4NH0.Y-p9a22T94SMo4IfRjeV0CyeiNxmw5fTu1LNPzZkJho"
-);
-
-async function fetchDocs() {
-  const { data, error } = await supabase
-    .from("documents")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return data || [];
-}
-
-async function upsertDoc(doc) {
-  const { error } = await supabase.from("documents").upsert({
-    id: doc.id,
-    type_doc: doc.type_doc, numero: doc.numero, date: doc.date,
-    validite: doc.validite, client: doc.client, chantier: doc.chantier,
-    contact: doc.contact, email_client: doc.email_client || "",
-    objet: doc.objet, lignes: doc.lignes, sans_tva: doc.sans_tva,
-    tva: doc.tva, statut: doc.statut, date_envoi: doc.date_envoi || null,
-    a_votre_charge: doc.a_votre_charge, notes_bas: doc.notes_bas,
-    devis_origine: doc.devis_origine || null,
-    numero_situation: doc.numero_situation || null,
-  }, { onConflict: "id" });
-  if (error) throw new Error(error.message);
-}
-
-async function deleteDoc(id) {
-  const { error } = await supabase.from("documents").delete().eq("id", id);
-  if (error) throw new Error(error.message);
-}
-
-// ─── STYLES ───────────────────────────────────────────────────────────────────
-const inp = { background: "#FFF", border: "1px solid #D0D0D0", borderRadius: 6, color: "#1A1A1A", padding: "7px 10px", fontSize: 13, width: "100%", outline: "none", fontFamily: "'Barlow', sans-serif" };
-const sel = { ...inp, cursor: "pointer" };
-const btn = (color = "#E8A838", outline = false) => ({
-  background: outline ? "transparent" : color,
-  border: `1.5px solid ${color}`,
-  color: outline ? color : (color === "#E8A838" || color === "#999" || color === "#DDD") ? "#000" : "#FFF",
-  borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700,
-  cursor: "pointer", fontFamily: "'Barlow Condensed', sans-serif",
-  letterSpacing: "0.05em", textTransform: "uppercase",
-});
-const lbl = { display: "block", fontSize: 11, color: "#777", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 };
-const card = { background: "#FFF", border: "1px solid #E0E0E0", borderRadius: 10, padding: "20px 24px", marginBottom: 20 };
-
-// ─── COMPOSANTS UI ────────────────────────────────────────────────────────────
-function Badge({ statut }) {
-  const s = STATUTS[statut] || STATUTS.brouillon;
-  return <span style={{ background: s.bg, color: s.color, border: `1px solid ${s.color}40`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>{s.label}</span>;
-}
-
-function BadgeType({ type }) {
-  const t = TYPES_DOC[type] || TYPES_DOC.devis;
-  return <span style={{ background: `${t.color}20`, color: t.color, border: `1px solid ${t.color}50`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>{t.label}</span>;
-}
-
-function StatCard({ label, value, sub, color = "#E8A838" }) {
-  return (
-    <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderTop: `3px solid ${color}`, borderRadius: 10, padding: "16px 18px", flex: 1, minWidth: 130 }}>
-      <div style={{ fontSize: 10, color: "#999", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, color, fontFamily: "'Barlow Condensed', sans-serif" }}>{value}</div>
-      {sub && <div style={{ fontSize: 10, color: "#AAA", marginTop: 3 }}>{sub}</div>}
-    </div>
-  );
-}
-
-function LigneDevis({ ligne, index, onUpdate, onDelete }) {
-  const m = parseFloat(ligne.quantite || 0) * parseFloat(ligne.pu || 0);
-  return (
-    <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 6, display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, alignItems: "start" }}>
-      <textarea placeholder="Désignation de la prestation..." value={ligne.designation} onChange={e => onUpdate(index, { designation: e.target.value })} rows={2} spellCheck lang="fr" style={{ ...inp, resize: "vertical", minHeight: 56, lineHeight: 1.5 }} />
-      <select value={ligne.unite} onChange={e => onUpdate(index, { unite: e.target.value })} style={sel}>
-        <option value="">Unité</option>
-        {UNITES.map(u => <option key={u} value={u}>{u}</option>)}
-      </select>
-      <input type="number" placeholder="Qté" value={ligne.quantite} onChange={e => onUpdate(index, { quantite: e.target.value })} style={{ ...inp, textAlign: "right" }} />
-      <input type="number" placeholder="PU HT" value={ligne.pu} onChange={e => onUpdate(index, { pu: e.target.value })} style={{ ...inp, textAlign: "right" }} />
-      <div style={{ color: m > 0 ? "#E8A838" : "#CCC", fontSize: 13, fontWeight: 700, textAlign: "right", paddingTop: 8 }}>{m > 0 ? `${formatMontant(m)} €` : "—"}</div>
-      <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
-    </div>
-  );
 }
 
 // ─── GÉNÉRATION PDF ───────────────────────────────────────────────────────────
@@ -323,43 +299,119 @@ async function genererPDF(doc, totaux) {
   return pdf;
 }
 
+// ─── STYLES ───────────────────────────────────────────────────────────────────
+const inp = { background: "#FFF", border: "1px solid #D0D0D0", borderRadius: 6, color: "#1A1A1A", padding: "7px 10px", fontSize: 13, width: "100%", outline: "none", fontFamily: "'Barlow', sans-serif" };
+const sel = { ...inp, cursor: "pointer" };
+const btn = (color = "#E8A838", outline = false) => ({
+  background: outline ? "transparent" : color,
+  border: `1.5px solid ${color}`,
+  color: outline ? color : (color === "#E8A838" || color === "#999" || color === "#DDD") ? "#000" : "#FFF",
+  borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700,
+  cursor: "pointer", fontFamily: "'Barlow Condensed', sans-serif",
+  letterSpacing: "0.05em", textTransform: "uppercase",
+});
+const lbl = { display: "block", fontSize: 11, color: "#777", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 };
+const card = { background: "#FFF", border: "1px solid #E0E0E0", borderRadius: 10, padding: "20px 24px", marginBottom: 20 };
+
+// ─── COMPOSANTS UI ────────────────────────────────────────────────────────────
+function Badge({ statut }) {
+  const s = STATUTS[statut] || STATUTS.brouillon;
+  return <span style={{ background: s.bg, color: s.color, border: `1px solid ${s.color}40`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>{s.label}</span>;
+}
+function BadgeType({ type }) {
+  const t = TYPES_DOC[type] || TYPES_DOC.devis;
+  return <span style={{ background: `${t.color}20`, color: t.color, border: `1px solid ${t.color}50`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>{t.label}</span>;
+}
+function StatCard({ label, value, sub, color = "#E8A838" }) {
+  return (
+    <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderTop: `3px solid ${color}`, borderRadius: 10, padding: "16px 18px", flex: 1, minWidth: 130 }}>
+      <div style={{ fontSize: 10, color: "#999", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, fontFamily: "'Barlow Condensed', sans-serif" }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: "#AAA", marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+}
+function LigneDevis({ ligne, index, onUpdate, onDelete }) {
+  const m = parseFloat(ligne.quantite || 0) * parseFloat(ligne.pu || 0);
+  return (
+    <div style={{ background: "#FFF", border: "1px solid #E8E8E8", borderLeft: "3px solid #E8A838", borderRadius: 8, padding: "10px 12px", marginBottom: 6, display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, alignItems: "start" }}>
+      <textarea placeholder="Désignation..." value={ligne.designation} onChange={e => onUpdate(index, { designation: e.target.value })} rows={2} spellCheck lang="fr" style={{ ...inp, resize: "vertical", minHeight: 56, lineHeight: 1.5 }} />
+      <select value={ligne.unite} onChange={e => onUpdate(index, { unite: e.target.value })} style={sel}>
+        <option value="">Unité</option>
+        {UNITES.map(u => <option key={u} value={u}>{u}</option>)}
+      </select>
+      <input type="number" placeholder="Qté" value={ligne.quantite} onChange={e => onUpdate(index, { quantite: e.target.value })} style={{ ...inp, textAlign: "right" }} />
+      <input type="number" placeholder="PU HT" value={ligne.pu} onChange={e => onUpdate(index, { pu: e.target.value })} style={{ ...inp, textAlign: "right" }} />
+      <div style={{ color: m > 0 ? "#E8A838" : "#CCC", fontSize: 13, fontWeight: 700, textAlign: "right", paddingTop: 8 }}>{m > 0 ? `${formatMontant(m)} €` : "—"}</div>
+      <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
+    </div>
+  );
+}
+
 // ─── APP ──────────────────────────────────────────────────────────────────────
 export default function App() {
-
   const [step, setStep] = useState("dashboard");
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [erreur, setErreur] = useState("");
   const [doc, setDoc] = useState(null);
   const [liste, setListe] = useState([]);
-  const [listeLoading, setListeLoading] = useState(false);
   const [confirmSuppr, setConfirmSuppr] = useState(null);
   const [confirmConvert, setConfirmConvert] = useState(null);
   const [filtreStatut, setFiltreStatut] = useState("tous");
   const [filtreType, setFiltreType] = useState("tous");
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
+  const [driveToken, setDriveToken] = useState(null);
+  const [driveFolderId, setDriveFolderId] = useState(null);
+  const [driveConnecting, setDriveConnecting] = useState(false);
+  const tokenClientRef = useRef(null);
 
-  // Charger docs au démarrage
-  useEffect(() => { loadDocs(); }, []);
+  // Charger depuis localStorage au démarrage
+  useEffect(() => {
+    setListe(chargerDocs());
+    // Charger le script Google Identity Services
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.onload = () => initGoogleAuth();
+    document.head.appendChild(script);
+  }, []);
 
-  const loadDocs = async () => {
-    setListeLoading(true);
-    try {
-      const data = await fetchDocs();
-      setListe(data);
-    } catch(e) {
-      showToast("❌ Erreur chargement : " + e.message);
-    }
-    setListeLoading(false);
+  const initGoogleAuth = () => {
+    tokenClientRef.current = window.google?.accounts?.oauth2?.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: GOOGLE_SCOPES,
+      callback: async (response) => {
+        if (response.access_token) {
+          setDriveToken(response.access_token);
+          setDriveConnecting(true);
+          try {
+            const folderId = await getDriveFolderId(response.access_token);
+            setDriveFolderId(folderId);
+            // Charger les données depuis Drive
+            const driveData = await loadDriveData(response.access_token, folderId);
+            if (driveData.length > 0) {
+              setListe(driveData);
+              sauvegarderLocal(driveData);
+              showToast("✅ Données chargées depuis Google Drive");
+            }
+          } catch(e) {
+            showToast("⚠️ Drive connecté mais erreur chargement : " + e.message);
+          }
+          setDriveConnecting(false);
+        }
+      }
+    });
   };
 
-  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3000); };
+  const connecterDrive = () => {
+    if (tokenClientRef.current) tokenClientRef.current.requestAccessToken();
+    else showToast("⚠️ Google non initialisé, patientez...");
+  };
 
-
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
 
   const totaux = doc ? calcTotaux(doc) : { ht: 0, tva: 0, ttc: 0 };
-
   const updateLigne = useCallback((i, p) => setDoc(d => { const l = [...d.lignes]; l[i] = { ...l[i], ...p }; return { ...d, lignes: l }; }), []);
   const deleteLigne = useCallback((i) => setDoc(d => ({ ...d, lignes: d.lignes.filter((_, j) => j !== i) })), []);
   const addLigne = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), designation: "", unite: "", quantite: "", pu: "" }] }));
@@ -371,11 +423,23 @@ export default function App() {
     if (!doc) return;
     setSaving(true);
     try {
-      await upsertDoc(doc);
-      await loadDocs();
-      if (!silent) showToast(`✅ ${TYPES_DOC[doc.type_doc]?.label} ${doc.numero} sauvegardé`);
+      const ancienne = liste.find(d => d.id === doc.id);
+      const nouvelle = { ...doc, updatedAt: new Date().toISOString() };
+      const nouvelleListe = ancienne
+        ? liste.map(d => d.id === doc.id ? nouvelle : d)
+        : [nouvelle, ...liste];
+      setListe(nouvelleListe);
+      sauvegarderLocal(nouvelleListe);
+
+      // Sauvegarder sur Drive si connecté
+      if (driveToken && driveFolderId) {
+        await saveDriveData(driveToken, driveFolderId, nouvelleListe);
+        if (!silent) showToast(`✅ ${TYPES_DOC[doc.type_doc]?.label} ${doc.numero} sauvegardé sur Drive`);
+      } else {
+        if (!silent) showToast(`✅ ${TYPES_DOC[doc.type_doc]?.label} ${doc.numero} sauvegardé`);
+      }
     } catch(e) {
-      showToast("❌ Erreur sauvegarde : " + e.message);
+      showToast("❌ Erreur : " + e.message);
     }
     setSaving(false);
   };
@@ -383,12 +447,12 @@ export default function App() {
   const changerStatut = async (id, statut) => {
     const d = liste.find(d => d.id === id);
     if (!d) return;
-    const updated = { ...d, statut, date_envoi: statut === "envoye" ? new Date().toISOString().split("T")[0] : d.date_envoi };
-    try {
-      await upsertDoc(updated);
-      await loadDocs();
-      if (doc?.id === id) setDoc(updated);
-    } catch(e) { showToast("❌ " + e.message); }
+    const updated = { ...d, statut, date_envoi: statut === "envoye" ? new Date().toISOString().split("T")[0] : d.date_envoi, updatedAt: new Date().toISOString() };
+    const nouvelleListe = liste.map(x => x.id === id ? updated : x);
+    setListe(nouvelleListe);
+    sauvegarderLocal(nouvelleListe);
+    if (driveToken && driveFolderId) await saveDriveData(driveToken, driveFolderId, nouvelleListe);
+    if (doc?.id === id) setDoc(updated);
   };
 
   const convertirEn = async (type) => {
@@ -397,23 +461,23 @@ export default function App() {
     const newDoc = nouveauDoc(type, doc);
     if (type === "situation") newDoc.numero_situation = situations.length + 1;
     await changerStatut(doc.id, "accepte");
-    try {
-      await upsertDoc(newDoc);
-      await loadDocs();
-      setDoc(newDoc);
-      setConfirmConvert(null);
-      setStep("formulaire");
-      showToast(`✅ Converti en ${TYPES_DOC[type].label} — ${newDoc.numero}`);
-    } catch(e) { showToast("❌ " + e.message); }
+    const nouvelleListe = [newDoc, ...liste.map(x => x.id === doc.id ? { ...x, statut: "accepte" } : x)];
+    setListe(nouvelleListe);
+    sauvegarderLocal(nouvelleListe);
+    if (driveToken && driveFolderId) await saveDriveData(driveToken, driveFolderId, nouvelleListe);
+    setDoc(newDoc);
+    setConfirmConvert(null);
+    setStep("formulaire");
+    showToast(`✅ Converti en ${TYPES_DOC[type].label} — ${newDoc.numero}`);
   };
 
   const supprimer = async (id) => {
-    try {
-      await deleteDoc(id);
-      await loadDocs();
-      setConfirmSuppr(null);
-      showToast("🗑 Document supprimé");
-    } catch(e) { showToast("❌ " + e.message); }
+    const nouvelleListe = liste.filter(d => d.id !== id);
+    setListe(nouvelleListe);
+    sauvegarderLocal(nouvelleListe);
+    if (driveToken && driveFolderId) await saveDriveData(driveToken, driveFolderId, nouvelleListe);
+    setConfirmSuppr(null);
+    showToast("🗑 Document supprimé");
   };
 
   const nomFichier = () => {
@@ -437,10 +501,25 @@ export default function App() {
   const exporterPDF = async () => {
     if (!doc) return;
     const pdf = await genererPDF(doc, totaux);
-    pdf.save(`${nomFichier()}.pdf`);
+    const nom = `${nomFichier()}.pdf`;
+
+    if (driveToken && driveFolderId) {
+      // Upload sur Google Drive
+      try {
+        showToast("⏳ Envoi vers Google Drive...");
+        const pdfBytes = pdf.output("arraybuffer");
+        await uploadToDrive(driveToken, driveFolderId, nom, pdfBytes, "application/pdf");
+        showToast(`✅ PDF sauvegardé sur Drive : ${nom}`);
+      } catch(e) {
+        showToast("⚠️ Erreur Drive — téléchargement local");
+        pdf.save(nom);
+      }
+    } else {
+      pdf.save(nom);
+    }
   };
 
-  const exporterXLSX = () => {
+  const exporterXLSX = async () => {
     if (!doc) return;
     const wb = XLSX.utils.book_new();
     const rows = [
@@ -453,7 +532,20 @@ export default function App() {
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws["!cols"] = [{ wch: 50 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
     XLSX.utils.book_append_sheet(wb, ws, TYPES_DOC[doc.type_doc]?.label || "Document");
-    XLSX.writeFile(wb, `${nomFichier()}.xlsx`);
+    const nom = `${nomFichier()}.xlsx`;
+
+    if (driveToken && driveFolderId) {
+      try {
+        showToast("⏳ Envoi vers Google Drive...");
+        const xlsxBytes = XLSX.write(wb, { bookType: "xlsx", type: "arraybuffer" });
+        await uploadToDrive(driveToken, driveFolderId, nom, xlsxBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        showToast(`✅ XLSX sauvegardé sur Drive : ${nom}`);
+      } catch(e) {
+        XLSX.writeFile(wb, nom);
+      }
+    } else {
+      XLSX.writeFile(wb, nom);
+    }
   };
 
   // Stats
@@ -473,9 +565,6 @@ export default function App() {
     return matchType && matchStatut;
   });
 
-
-
-  // ── APP PRINCIPALE ────────────────────────────────────────────────────────
   return (
     <div style={{ minHeight: "100vh", background: "#F4F4F4", fontFamily: "'Barlow', 'Helvetica Neue', sans-serif", color: "#1A1A1A" }}>
       <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@500;700;800&display=swap" rel="stylesheet" />
@@ -491,8 +580,20 @@ export default function App() {
             <div style={{ fontSize: 9, color: "#999", letterSpacing: "0.1em", textTransform: "uppercase" }}>Gestion commerciale</div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {alertes.length > 0 && <span style={{ background: "#E74C3C", color: "#FFF", borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>⚠️ {alertes.length}</span>}
+
+          {/* Bouton Google Drive */}
+          {driveToken ? (
+            <span style={{ fontSize: 11, color: "#27AE60", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+              {driveConnecting ? "⏳ Drive..." : "✅ Drive connecté"}
+            </span>
+          ) : (
+            <button onClick={connecterDrive} style={{ ...btn("#4285F4"), padding: "5px 12px", fontSize: 11 }}>
+              🔗 Google Drive
+            </button>
+          )}
+
           {["dashboard", "liste"].map(s => (
             <button key={s} onClick={() => setStep(s)} style={{ ...btn(step === s ? "#E8A838" : "#DDD", step !== s), padding: "5px 12px", fontSize: 11, color: step === s ? "#000" : "#666" }}>
               {s === "dashboard" ? "📊 Dashboard" : "📋 Documents"}
@@ -506,7 +607,6 @@ export default function App() {
               {step === "formulaire" && <button onClick={() => setStep("apercu")} style={{ ...btn("#E8A838"), padding: "5px 12px", fontSize: 11 }}>👁 Aperçu</button>}
             </>
           )}
-
         </div>
       </div>
 
@@ -524,8 +624,16 @@ export default function App() {
               </div>
             </div>
 
+            {/* Bannière Drive non connecté */}
+            {!driveToken && (
+              <div style={{ background: "#EBF5FB", border: "1px solid #2980B9", borderRadius: 8, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 13, color: "#2980B9", fontWeight: 600 }}>🔗 Connectez Google Drive pour sauvegarder vos PDF et données dans le cloud</span>
+                <button onClick={connecterDrive} style={{ ...btn("#4285F4"), padding: "6px 14px", fontSize: 12 }}>Connecter</button>
+              </div>
+            )}
+
             {alertes.length > 0 && (
-              <div style={{ marginBottom: 20 }}>
+              <div style={{ marginBottom: 16 }}>
                 {alertes.map(d => {
                   const j = joursRestants(d);
                   return (
@@ -550,9 +658,7 @@ export default function App() {
 
             <div style={card}>
               <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 16, fontWeight: 700, marginBottom: 14 }}>Derniers documents</div>
-              {listeLoading ? (
-                <div style={{ color: "#AAA", textAlign: "center", padding: "20px" }}>Chargement...</div>
-              ) : liste.length === 0 ? (
+              {liste.length === 0 ? (
                 <div style={{ color: "#AAA", textAlign: "center", padding: "24px 0" }}>Aucun document — créez votre premier devis</div>
               ) : liste.slice(0, 8).map(d => {
                 const t = calcTotaux(d);
@@ -574,7 +680,7 @@ export default function App() {
                   </div>
                 );
               })}
-              {liste.length > 8 && <button onClick={() => setStep("liste")} style={{ ...btn("#999", true), width: "100%", marginTop: 12, padding: "7px" }}>Voir tous les documents ({liste.length})</button>}
+              {liste.length > 8 && <button onClick={() => setStep("liste")} style={{ ...btn("#999", true), width: "100%", marginTop: 12, padding: "7px" }}>Voir tous ({liste.length})</button>}
             </div>
           </div>
         )}
@@ -601,9 +707,7 @@ export default function App() {
               ))}
             </div>
 
-            {listeLoading ? (
-              <div style={{ color: "#AAA", textAlign: "center", padding: "40px" }}>Chargement...</div>
-            ) : listeFiltree.length === 0 ? (
+            {listeFiltree.length === 0 ? (
               <div style={{ textAlign: "center", padding: "60px", color: "#AAA", border: "1px dashed #DDD", borderRadius: 12 }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>📄</div>Aucun document
               </div>
@@ -631,7 +735,7 @@ export default function App() {
                     {d.type_doc === "devis" && s === "brouillon" && <button onClick={() => changerStatut(d.id, "envoye")} style={{ ...btn("#2980B9"), padding: "4px 10px", fontSize: 10 }}>📤</button>}
                     {d.type_doc === "devis" && s === "envoye" && <button onClick={() => changerStatut(d.id, "accepte")} style={{ ...btn("#27AE60"), padding: "4px 10px", fontSize: 10 }}>✅</button>}
                     {d.type_doc === "devis" && s === "envoye" && <button onClick={() => changerStatut(d.id, "refuse")} style={{ ...btn("#E74C3C"), padding: "4px 10px", fontSize: 10 }}>❌</button>}
-                    <button onClick={() => ouvrirDoc(d)} style={{ ...btn("#E8A838"), padding: "4px 10px", fontSize: 10 }}>✏️ Modifier</button>
+                    <button onClick={() => ouvrirDoc(d)} style={{ ...btn("#E8A838"), padding: "4px 10px", fontSize: 10 }}>✏️</button>
                     <button onClick={() => setConfirmSuppr(d.id)} style={{ ...btn("#E74C3C", true), padding: "4px 8px", fontSize: 10 }}>🗑</button>
                   </div>
                 </div>
@@ -669,14 +773,19 @@ export default function App() {
               </div>
               <div style={{ ...card, flex: 2, borderColor: "#E8A838" }}>
                 <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 15, fontWeight: 700, color: "#E8A838", marginBottom: 10 }}>🤖 INTERPRÉTATION IA</div>
-                {!PROXY_URL && <div style={{ background: "#FFF8E1", border: "1px solid #F9A825", borderRadius: 6, padding: "7px 12px", marginBottom: 10, fontSize: 11, color: "#856404" }}>⚠️ Proxy IA non encore configuré — utilisez la saisie directe</div>}
-                <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Décris les travaux librement..." spellCheck lang="fr" style={{ ...inp, minHeight: 120, resize: "vertical", lineHeight: 1.7 }} />
+                <textarea value={note} onChange={e => setNote(e.target.value)} placeholder={`Ex :\n• 10 carottages Ø150 au RDC\n• Sciage refend 20cm, 3×4m\n• Renforcement carbone S1512 - 12ml`} spellCheck lang="fr" style={{ ...inp, minHeight: 120, resize: "vertical", lineHeight: 1.7 }} />
                 {erreur && <div style={{ background: "#FFF0F0", border: "1px solid #E07070", borderRadius: 6, padding: "7px 12px", margin: "8px 0", color: "#C0392B", fontSize: 12 }}>⚠️ {erreur}</div>}
                 <button onClick={async () => {
-                  if (!note.trim() || !PROXY_URL) return;
+                  if (!note.trim()) return;
                   setLoading(true); setErreur("");
                   try {
-                    const r = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: "Extrais les lignes de devis en JSON: {\"lignes\":[{\"designation\":\"...\",\"unite\":\"cml|ml|m²|U|Forfait|Ens\",\"quantite\":10}],\"client_detecte\":\"...\",\"chantier_detecte\":\"...\"}", messages: [{ role: "user", content: note }] }) });
+                    const sys = `Tu es expert béton CHOK'BÉTON. Extrais les lignes de devis en JSON UNIQUEMENT sans texte autour:
+{"lignes":[{"designation":"description professionnelle complète","unite":"cml|ml|m²|U|Forfait|Ens","quantite":10}],"client_detecte":"...","chantier_detecte":"..."}
+Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait→Forfait.`;
+                    const r = await fetch(PROXY_URL, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ system: sys, messages: [{ role: "user", content: note }] })
+                    });
                     const data = await r.json();
                     const text = data.content?.map(b => b.text || "").join("") || "{}";
                     const result = JSON.parse(text.replace(/```json|```/g, "").trim());
@@ -685,8 +794,8 @@ export default function App() {
                     setStep("formulaire");
                   } catch(e) { setErreur("Erreur : " + e.message); }
                   setLoading(false);
-                }} disabled={loading || !note.trim() || !PROXY_URL} style={{ ...btn(PROXY_URL ? "#E8A838" : "#CCC"), marginTop: 10, opacity: !PROXY_URL ? 0.5 : 1 }}>
-                  {loading ? "⏳ Analyse..." : "🤖 Interpréter"}
+                }} disabled={loading || !note.trim()} style={{ ...btn("#E8A838"), marginTop: 10 }}>
+                  {loading ? "⏳ Analyse..." : "🤖 Interpréter avec l'IA"}
                 </button>
               </div>
             </div>
@@ -780,7 +889,7 @@ export default function App() {
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button onClick={() => sauvegarder()} disabled={saving} style={{ ...btn("#27AE60"), opacity: saving ? 0.7 : 1 }}>
-                {saving ? "⏳ Sauvegarde..." : "💾 Sauvegarder"}
+                {saving ? "⏳" : "💾"} Sauvegarder
               </button>
               <button onClick={exporterXLSX} style={btn("#2980B9")}>📊 XLSX</button>
               <button onClick={() => setStep("apercu")} style={btn("#E8A838")}>👁 Aperçu PDF</button>
@@ -809,11 +918,13 @@ export default function App() {
           <div>
             <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
               <h2 style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700, color: "#E8A838", margin: 0 }}>Aperçu — {doc.numero}</h2>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => setStep("formulaire")} style={btn("#999", true)}>← Modifier</button>
                 <button onClick={() => sauvegarder()} style={btn("#27AE60")}>💾</button>
                 <button onClick={exporterXLSX} style={btn("#2980B9")}>📊 XLSX</button>
-                <button onClick={exporterPDF} style={btn("#E8A838")}>📄 PDF</button>
+                <button onClick={exporterPDF} style={btn("#E8A838")}>
+                  {driveToken ? "📄 PDF → Drive" : "📄 PDF"}
+                </button>
                 <button onClick={envoyerMail} style={btn("#E67E22")}>📧 Mail</button>
               </div>
             </div>
