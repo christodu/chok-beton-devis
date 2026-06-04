@@ -599,16 +599,16 @@ export default function App() {
   const imprimerPDF = async () => {
     if (!doc) return;
     const pdf = await genererPDF(doc, totaux);
+    pdf.autoPrint();
     const blob = new Blob([pdf.output("arraybuffer")], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
-    const iframe = document.createElement("iframe");
-    iframe.style.display = "none";
-    iframe.src = url;
-    document.body.appendChild(iframe);
-    iframe.onload = () => {
-      iframe.contentWindow.print();
-      setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(url); }, 2000);
-    };
+    const newWindow = window.open(url, "_blank");
+    if (!newWindow) {
+      // Si le popup est bloqué, télécharger à la place
+      showToast("⚠️ Autorisez les popups pour imprimer — téléchargement en cours");
+      pdf.save(`${nomFichier()}.pdf`);
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
   const sauvegarderSurDrive = async () => {
