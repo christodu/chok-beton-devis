@@ -261,17 +261,28 @@ async function genererPDF(doc, totaux) {
     startY: y,
     head: [["Désignation", "Unité", "Quantité", "PU HT (€)", "Total HT (€)"]],
     body: (doc.lignes || []).map(l => {
-      if (l.type === "commentaire") return [{ content: l.designation || "", colSpan: 5, styles: { fontStyle: "italic", fillColor: [255, 251, 240], textColor: [90, 74, 26], fontStyle: "bold" } }];
+      if (l.type === "commentaire") return [{ content: l.designation || "", colSpan: 5, styles: { fontStyle: "bold", fillColor: [255, 251, 240], textColor: [90, 74, 26] } }];
       const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
       return [l.designation || "—", l.unite || "—", l.quantite || "—", l.pu ? formatMontant(parseFloat(l.pu)) : "—", m > 0 ? formatMontant(m) : "—"];
     }),
-    margin: { left: mL, right: mR },
-    styles: { fontSize: 8.5, cellPadding: 2.5, lineColor: [238, 238, 238], lineWidth: 0.2 },
+    margin: { left: mL, right: mR, bottom: 20 },
+    styles: { fontSize: 8.5, cellPadding: 2.5, lineColor: [238, 238, 238], lineWidth: 0.2, overflow: "linebreak" },
     headStyles: { fillColor: noir, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8 },
     columnStyles: { 0: { cellWidth: "auto" }, 1: { cellWidth: 18, halign: "center" }, 2: { cellWidth: 22, halign: "right" }, 3: { cellWidth: 32, halign: "right" }, 4: { cellWidth: 34, halign: "right", fontStyle: "bold" } },
-    alternateRowStyles: { fillColor: [247, 247, 247] }, theme: "grid",
+    alternateRowStyles: { fillColor: [247, 247, 247] },
+    theme: "grid",
+    showHead: "everyPage",
+    didDrawPage: (data) => {
+      // Bande dorée haute sur chaque nouvelle page
+      if (data.pageNumber > 1) {
+        pdf.setFillColor(...gold);
+        pdf.rect(0, 0, W, 4, "F");
+      }
+    },
   });
   y = (pdf.lastAutoTable?.finalY || y) + 5;
+  // S'assurer qu'on est sur la dernière page après autoTable
+  pdf.setPage(pdf.internal.getNumberOfPages());
 
   if (doc.a_votre_charge && doc.type_doc === "devis") {
     pdf.setFillColor(255, 251, 242); pdf.setDrawColor(240, 216, 136);
@@ -310,6 +321,36 @@ async function genererPDF(doc, totaux) {
     pdf.text(cl, mL + 3, y + 8); y += ch + 5;
   }
 
+  // ── PIED DE PAGE SUR TOUTES LES PAGES ──
+  const totalPages = pdf.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    pdf.setPage(p);
+    const pH = pdf.internal.pageSize.height;
+    // Bande dorée basse
+    pdf.setFillColor(...gold); pdf.rect(0, pH - 3, W, 3, "F");
+    // Séparateur pied
+    pdf.setDrawColor(238, 238, 238); pdf.setLineWidth(0.2);
+    pdf.line(mL, pH - 12, W - mR, pH - 12);
+    // Mentions légales
+    pdf.setFontSize(6.5); pdf.setFont("helvetica", "normal"); pdf.setTextColor(180, 180, 180);
+    pdf.text(`${SOCIETE.nom} · ${SOCIETE.forme} · ${SOCIETE.rcs}`, mL, pH - 8);
+    pdf.text(`SIRET ${SOCIETE.siret} · TVA ${SOCIETE.tva_intra}`, W - mR, pH - 8, { align: "right" });
+    // Numéro de page si plusieurs pages
+    if (totalPages > 1) {
+      pdf.text(`Page ${p} / ${totalPages}`, W / 2, pH - 8, { align: "center" });
+    }
+  }
+
+  // ── SIGNATURES + TOTAUX SUR LA DERNIÈRE PAGE ──
+  pdf.setPage(totalPages);
+  const pHLast = pdf.internal.pageSize.height;
+  // Vérifier qu'il y a assez de place, sinon ajouter une page
+  if (y > pHLast - 60) {
+    pdf.addPage();
+    pdf.setFillColor(...gold); pdf.rect(0, 0, W, 4, "F");
+    y = 20;
+  }
+
   const sigW = (W - mL - mR - 8) / 2;
   pdf.setDrawColor(220, 220, 220); pdf.setLineWidth(0.3);
   pdf.rect(mL, y, sigW, 22); pdf.rect(mL + sigW + 8, y, sigW, 22);
@@ -321,12 +362,6 @@ async function genererPDF(doc, totaux) {
   pdf.setFont("helvetica", "normal"); pdf.setTextColor(...gris);
   pdf.text("christopher@chok-beton.fr  ·  06 24 26 21 05", mL + sigW + 10, y + 8);
 
-  const pH = pdf.internal.pageSize.height;
-  pdf.setDrawColor(238, 238, 238); pdf.setLineWidth(0.2); pdf.line(mL, pH - 12, W - mR, pH - 12);
-  pdf.setFontSize(6.5); pdf.setFont("helvetica", "normal"); pdf.setTextColor(180, 180, 180);
-  pdf.text(`${SOCIETE.nom} · ${SOCIETE.forme} · ${SOCIETE.rcs}`, mL, pH - 8);
-  pdf.text(`SIRET ${SOCIETE.siret} · TVA ${SOCIETE.tva_intra}`, W - mR, pH - 8, { align: "right" });
-  pdf.setFillColor(...gold); pdf.rect(0, pH - 3, W, 3, "F");
   return pdf;
 }
 
