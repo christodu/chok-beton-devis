@@ -141,6 +141,40 @@ async function uploadToDrive(token, folderId, fileName, content, mimeType) {
   return await resp.json();
 }
 
+async function listDriveFiles(token, folderId) {
+  const r = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q='${folderId}' in parents and trashed=false&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await r.json();
+  return data.files || [];
+}
+
+async function uploadAnnexe(token, folderId, file) {
+  const metadata = { name: file.name, parents: [folderId] };
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+  form.append("file", file);
+  const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
+    method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form
+  });
+  return await r.json();
+}
+
+async function deleteDriveFile(token, fileId) {
+  await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+    method: "DELETE", headers: { Authorization: `Bearer ${token}` }
+  });
+}
+
+async function getDevisSubFolderId(token, rootFolderId, doc) {
+  const num = doc.numero.replace(/CDJ |FAC |SIT /, "");
+  const cli = (doc.client || "Client").trim().toUpperCase().slice(0, 20);
+  const chan = (doc.chantier || "").trim().slice(0, 30);
+  const folderName = [num, cli, chan].filter(Boolean).join(" ").replace(/[/\\:*?"<>|]/g, "-");
+  return { folderId: await getOrCreateSubFolder(token, rootFolderId, folderName), folderName };
+}
+
 async function sauvegarderDevisSurDrive(token, rootFolderId, doc, pdfBytes) {
   const num = doc.numero.replace(/CDJ |FAC |SIT /, "");
   const cli = (doc.client || "Client").trim().toUpperCase().slice(0, 20);
@@ -480,6 +514,11 @@ export default function App() {
   const [filtreType, setFiltreType] = useState("tous");
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
+  const [annexesPannel, setAnnexesPannel] = useState(false);
+  const [annexesFiles, setAnnexesFiles] = useState([]);
+  const [annexesLoading, setAnnexesLoading] = useState(false);
+  const [annexesFolderId, setAnnexesFolderId] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState("");
   const [driveToken, setDriveToken] = useState(null);
   const [driveFolderId, setDriveFolderId] = useState(null);
   const [driveConnecting, setDriveConnecting] = useState(false);
@@ -659,6 +698,47 @@ export default function App() {
       pdf.save(`${nomFichier()}.pdf`);
     }
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+
+  const openAnnexes = async () => {
+    if (!doc) return;
+    if (!driveToken || !driveFolderId) { showToast("⚠️ Connectez Google Drive d'abord"); return; }
+    setAnnexesLoading(true);
+    try {
+      const { folderId } = await getDevisSubFolderId(driveToken, driveFolderId, doc);
+      setAnnexesFolderId(folderId);
+      const files = await listDriveFiles(driveToken, folderId);
+      setAnnexesFiles(files);
+      setAnnexesPannel(true);
+    } catch(e) { showToast("❌ Erreur : " + e.message); }
+    setAnnexesLoading(false);
+  };
+
+  const uploadAnnexeFile = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length || !annexesFolderId) return;
+    for (const file of files) {
+      setUploadProgress(`⏳ Upload : ${file.name}`);
+      try {
+        await uploadAnnexe(driveToken, annexesFolderId, file);
+      } catch(err) { showToast("❌ Erreur upload : " + err.message); }
+    }
+    const updated = await listDriveFiles(driveToken, annexesFolderId);
+    setAnnexesFiles(updated);
+    setUploadProgress("");
+    showToast(`✅ ${files.length} fichier(s) ajouté(s)`);
+    e.target.value = "";
+  };
+
+  const supprimerAnnexe = async (fileId, fileName) => {
+    if (!confirm(`Supprimer "${fileName}" ?`)) return;
+    await deleteDriveFile(driveToken, fileId);
+    setAnnexesFiles(f => f.filter(x => x.id !== fileId));
+    showToast("🗑 Fichier supprimé");
+  };
+
+  const ouvrirAnnexe = (fileId) => {
+    window.open(`https://drive.google.com/file/d/${fileId}/view`, "_blank");
   };
 
   const sauvegarderSurDrive = async () => {
@@ -1065,6 +1145,7 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
               <button onClick={exporterPDF} style={btn("#E8A838")}>📄 PDF</button>
               <button onClick={imprimerPDF} style={btn("#1A1A1A")}>🖨️ Imprimer</button>
               <button onClick={sauvegarderSurDrive} disabled={saving} style={{ ...btn("#4285F4"), opacity: saving ? 0.7 : 1 }}>☁️ Drive</button>
+              <button onClick={openAnnexes} disabled={annexesLoading} style={{ ...btn("#16A085"), opacity: annexesLoading ? 0.7 : 1 }}>📎 Annexes{annexesFiles.length > 0 ? ` (${annexesFiles.length})` : ""}</button>
               <button onClick={exporterXLSX} style={btn("#2980B9")}>📊 XLSX</button>
               <button onClick={() => setStep("apercu")} style={btn("#999", true)}>👁 Aperçu</button>
               <button onClick={envoyerMail} style={btn("#E67E22")}>📧 Envoyer</button>
@@ -1098,6 +1179,7 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
                 <button onClick={exporterPDF} style={btn("#E8A838")}>📄 PDF</button>
                 <button onClick={imprimerPDF} style={btn("#1A1A1A")}>🖨️ Imprimer</button>
                 <button onClick={sauvegarderSurDrive} disabled={saving} style={{ ...btn("#4285F4"), opacity: saving ? 0.7 : 1 }}>☁️ Drive</button>
+                <button onClick={openAnnexes} disabled={annexesLoading} style={{ ...btn("#16A085"), opacity: annexesLoading ? 0.7 : 1 }}>📎 Annexes{annexesFiles.length > 0 ? ` (${annexesFiles.length})` : ""}</button>
                 <button onClick={exporterXLSX} style={btn("#2980B9")}>📊 XLSX</button>
                 <button onClick={envoyerMail} style={btn("#E67E22")}>📧 Mail</button>
               </div>
@@ -1209,6 +1291,66 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
           </div>
         )}
       </div>
+
+      {/* ── PANNEAU ANNEXES ── */}
+      {annexesPannel && doc && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300 }}>
+          <div style={{ background: "#FFF", borderRadius: 14, width: 560, maxWidth: "95vw", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+            {/* Header */}
+            <div style={{ padding: "18px 24px", borderBottom: "1px solid #EEE", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 18, fontWeight: 800, color: "#16A085" }}>📎 Documents annexes</div>
+                <div style={{ fontSize: 12, color: "#999", marginTop: 2 }}>{doc.numero} — {doc.client || "—"}</div>
+                <div style={{ fontSize: 11, color: "#AAA" }}>Dossier Google Drive</div>
+              </div>
+              <button onClick={() => setAnnexesPannel(false)} style={{ background: "transparent", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+            </div>
+
+            {/* Upload */}
+            <div style={{ padding: "14px 24px", borderBottom: "1px solid #F0F0F0", background: "#F8F8F8" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "10px 16px", border: "2px dashed #16A085", borderRadius: 8, color: "#16A085", fontWeight: 700, fontSize: 13 }}>
+                <span style={{ fontSize: 20 }}>+</span>
+                Ajouter des fichiers (PDF, photos, plans, Word...)
+                <input type="file" multiple onChange={uploadAnnexeFile} style={{ display: "none" }} />
+              </label>
+              {uploadProgress && <div style={{ marginTop: 8, fontSize: 12, color: "#16A085", fontWeight: 600 }}>{uploadProgress}</div>}
+            </div>
+
+            {/* Liste fichiers */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "8px 16px" }}>
+              {annexesFiles.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "40px 20px", color: "#AAA" }}>
+                  <div style={{ fontSize: 36, marginBottom: 8 }}>📂</div>
+                  Aucun fichier — ajoutez vos documents
+                </div>
+              ) : annexesFiles.map(f => {
+                const isJson = f.name.endsWith(".json");
+                const isPdf = f.name.endsWith(".pdf");
+                const icon = isPdf ? "📄" : f.name.match(/\.(jpg|jpeg|png|gif)$/i) ? "🖼️" : f.name.match(/\.(doc|docx)$/i) ? "📝" : f.name.match(/\.(xls|xlsx)$/i) ? "📊" : f.name.match(/\.(dwg|dxf)$/i) ? "📐" : "📎";
+                return (
+                  <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 8px", borderBottom: "1px solid #F5F5F5" }}>
+                    <span style={{ fontSize: 20, flexShrink: 0 }}>{icon}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isJson ? "#CCC" : "#1A1A1A" }}>{f.name}</div>
+                      <div style={{ fontSize: 10, color: "#AAA" }}>{f.size ? `${Math.round(f.size / 1024)} Ko` : ""} · {new Date(f.modifiedTime).toLocaleDateString("fr-FR")}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      {!isJson && <button onClick={() => ouvrirAnnexe(f.id)} style={{ ...btn("#16A085", true), padding: "4px 10px", fontSize: 11 }}>Ouvrir</button>}
+                      {!isJson && !isPdf && <button onClick={() => supprimerAnnexe(f.id, f.name)} style={{ ...btn("#E74C3C", true), padding: "4px 8px", fontSize: 11 }}>🗑</button>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div style={{ padding: "14px 24px", borderTop: "1px solid #EEE", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 12, color: "#AAA" }}>{annexesFiles.filter(f => !f.name.endsWith(".json")).length} document(s)</span>
+              <button onClick={() => setAnnexesPannel(false)} style={{ ...btn("#999", true), padding: "7px 20px" }}>Fermer</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @media print {
