@@ -1280,7 +1280,16 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
                           <tr key={l.id} style={{ background: i % 2 === 0 ? "#FFF" : "#F7F7F7" }}>
                             {l.type === "commentaire" ? (
                               <td colSpan={5} style={{ padding: "7px 10px", borderBottom: "1px solid #EEE", fontSize: 10, lineHeight: 1.4, fontWeight: 600, fontStyle: "italic", color: "#5A4A1A", background: "#FFFBF0", whiteSpace: "pre-wrap" }}>{l.designation || ""}</td>
-                            ) : (<>
+                            ) : l.type === "option" ? (<>
+                              <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", fontSize: 10, lineHeight: 1.4, whiteSpace: "pre-wrap", background: "#F0F8FF" }}>
+                                <span style={{ background: "#2980B9", color: "#FFF", fontSize: 8, fontWeight: 700, borderRadius: 8, padding: "1px 6px", marginRight: 6 }}>OPTION</span>
+                                {l.designation || "—"}
+                              </td>
+                              <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "center", fontSize: 9.5, fontWeight: 600, background: "#F0F8FF" }}>{l.unite || "—"}</td>
+                              <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10, background: "#F0F8FF" }}>{l.quantite || "—"}</td>
+                              <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10, background: "#F0F8FF" }}>{l.pu ? formatMontant(parseFloat(l.pu)) : "—"}</td>
+                              <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10, fontWeight: 600, color: "#2980B9", fontStyle: "italic", background: "#F0F8FF" }}>{m > 0 ? `${formatMontant(m)} €` : "—"}</td>
+                            </>) : (<>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", fontSize: 10, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>{l.designation || "—"}</td>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "center", fontSize: 9.5, fontWeight: 600 }}>{l.unite || "—"}</td>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10 }}>{l.quantite || "—"}</td>
