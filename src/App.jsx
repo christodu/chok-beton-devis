@@ -297,13 +297,12 @@ async function genererPDF(doc, totaux) {
     body: (doc.lignes || []).map(l => {
       if (l.type === "commentaire") return [{ content: l.designation || "", colSpan: 5, styles: { fontStyle: "bold", fillColor: [255, 251, 240], textColor: [90, 74, 26] } }];
       if (l.type === "option") {
-        const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
         return [
           { content: `[OPTION] ${l.designation || "—"}`, styles: { fillColor: [240, 248, 255], textColor: [41, 128, 185], fontStyle: "italic" } },
           { content: l.unite || "—", styles: { fillColor: [240, 248, 255], halign: "center" } },
           { content: l.quantite || "—", styles: { fillColor: [240, 248, 255], halign: "right" } },
           { content: l.pu ? formatMontant(parseFloat(l.pu)) : "—", styles: { fillColor: [240, 248, 255], halign: "right" } },
-          { content: m > 0 ? `${formatMontant(m)} €` : "—", styles: { fillColor: [240, 248, 255], halign: "right", fontStyle: "italic", textColor: [41, 128, 185] } },
+          { content: "En option", styles: { fillColor: [240, 248, 255], halign: "right", fontStyle: "italic", textColor: [41, 128, 185] } },
         ];
       }
       const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
@@ -508,8 +507,8 @@ function LigneDevis({ ligne, index, onUpdate, onDelete, onInsert, onInsertCommen
           </select>
           <input type="number" placeholder="Qté" value={ligne.quantite} onChange={e => onUpdate(index, { quantite: e.target.value })} style={{ ...inp, textAlign: "right", background: "#F0F8FF" }} />
           <input type="number" placeholder="PU HT" value={ligne.pu} onChange={e => onUpdate(index, { pu: e.target.value })} style={{ ...inp, textAlign: "right", background: "#F0F8FF" }} />
-          <div style={{ color: "#2980B9", fontSize: 12, fontWeight: 700, textAlign: "right", paddingTop: 8, fontStyle: "italic" }}>
-            {ligne.quantite && ligne.pu ? `${formatMontant(parseFloat(ligne.quantite) * parseFloat(ligne.pu))} €` : "—"}
+          <div style={{ color: "#2980B9", fontSize: 11, fontWeight: 700, textAlign: "right", paddingTop: 8, fontStyle: "italic" }}>
+            En option
           </div>
           <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
         </div>
@@ -1288,7 +1287,7 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
                               <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "center", fontSize: 9.5, fontWeight: 600, background: "#F0F8FF" }}>{l.unite || "—"}</td>
                               <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10, background: "#F0F8FF" }}>{l.quantite || "—"}</td>
                               <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10, background: "#F0F8FF" }}>{l.pu ? formatMontant(parseFloat(l.pu)) : "—"}</td>
-                              <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10, fontWeight: 600, color: "#2980B9", fontStyle: "italic", background: "#F0F8FF" }}>{m > 0 ? `${formatMontant(m)} €` : "—"}</td>
+                              <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "right", fontSize: 10, fontWeight: 600, color: "#2980B9", fontStyle: "italic", background: "#F0F8FF" }}>En option</td>
                             </>) : (<>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", fontSize: 10, lineHeight: 1.4, whiteSpace: "pre-wrap" }}>{l.designation || "—"}</td>
                             <td style={{ padding: "7px 9px", borderBottom: "1px solid #EEE", textAlign: "center", fontSize: 9.5, fontWeight: 600 }}>{l.unite || "—"}</td>
@@ -1312,16 +1311,27 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
                       <div style={{ fontSize: 9.5, color: "#555", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{doc.a_votre_charge}</div>
                     </div>
                   )}
-                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-                    <div style={{ width: 270 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 10px", borderTop: "1px solid #E8E8E8" }}><span style={{ fontSize: 9.5, color: "#666" }}>Total HT</span><span style={{ fontSize: 9.5, fontWeight: 600 }}>{formatMontant(totaux.ht)} €</span></div>
-                      {!doc.sans_tva && <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 10px", borderTop: "1px solid #E8E8E8" }}><span style={{ fontSize: 9.5, color: "#666" }}>TVA {doc.tva}%</span><span style={{ fontSize: 9.5, fontWeight: 600 }}>{formatMontant(totaux.tva)} €</span></div>}
-                      <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 10px", background: "#1A1A1A", borderRadius: 4, marginTop: 4 }}>
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#E8A838" }}>{doc.sans_tva ? "TOTAL HT" : "TOTAL TTC"}</span>
-                        <span style={{ fontSize: 12, fontWeight: 800, color: "#E8A838" }}>{formatMontant(doc.sans_tva ? totaux.ht : totaux.ttc)} €</span>
+                  {(() => {
+                    const totalOptions = (doc.lignes || []).filter(l => l.type === "option").reduce((s, l) => s + parseFloat(l.quantite || 0) * parseFloat(l.pu || 0), 0);
+                    return (
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                        <div style={{ width: 270 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 10px", borderTop: "1px solid #E8E8E8" }}><span style={{ fontSize: 9.5, color: "#666" }}>Total HT</span><span style={{ fontSize: 9.5, fontWeight: 600 }}>{formatMontant(totaux.ht)} €</span></div>
+                          {!doc.sans_tva && <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 10px", borderTop: "1px solid #E8E8E8" }}><span style={{ fontSize: 9.5, color: "#666" }}>TVA {doc.tva}%</span><span style={{ fontSize: 9.5, fontWeight: 600 }}>{formatMontant(totaux.tva)} €</span></div>}
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 10px", background: "#1A1A1A", borderRadius: 4, marginTop: 4 }}>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: "#E8A838" }}>{doc.sans_tva ? "TOTAL HT" : "TOTAL TTC"}</span>
+                            <span style={{ fontSize: 12, fontWeight: 800, color: "#E8A838" }}>{formatMontant(doc.sans_tva ? totaux.ht : totaux.ttc)} €</span>
+                          </div>
+                          {totalOptions > 0 && (
+                            <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 10px", marginTop: 6, border: "1px solid #A8D4F0", borderRadius: 4, background: "#F0F8FF" }}>
+                              <span style={{ fontSize: 9.5, color: "#2980B9", fontStyle: "italic" }}>Options non comprises</span>
+                              <span style={{ fontSize: 9.5, color: "#2980B9", fontWeight: 600, fontStyle: "italic" }}>{formatMontant(totalOptions)} €</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
                   {doc.notes_bas && <div style={{ background: "#F8F8F8", borderRadius: 4, padding: "7px 12px", marginBottom: 10, fontSize: 9, color: "#666", lineHeight: 1.6 }}><span style={{ fontWeight: 700, color: "#444", display: "block", marginBottom: 2, fontSize: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Conditions</span>{doc.notes_bas}</div>}
                   <div style={{ display: "flex", gap: 16, marginBottom: 14 }}>
                     {[[doc.type_doc === "devis" ? "Bon pour accord — Signature client" : "Signature client", "Date :"], ["CHOK'BÉTON — Christopher Dupré", "christopher@chok-beton.fr  ·  06 24 26 21 05"]].map(([t,s]) => (
