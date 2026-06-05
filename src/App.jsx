@@ -56,7 +56,7 @@ function joursRestants(doc) {
   return Math.ceil((exp - new Date()) / 86400000);
 }
 function calcTotaux(doc) {
-  const ht = (doc.lignes || []).reduce((s, l) => s + (parseFloat(l.quantite || 0) * parseFloat(l.pu || 0)), 0);
+  const ht = (doc.lignes || []).filter(l => l.type !== 'option').reduce((s, l) => s + (parseFloat(l.quantite || 0) * parseFloat(l.pu || 0)), 0);
   const tva = doc.sans_tva ? 0 : ht * ((doc.tva || 20) / 100);
   return { ht, tva, ttc: ht + tva };
 }
@@ -296,6 +296,16 @@ async function genererPDF(doc, totaux) {
     head: [["Désignation", "Unité", "Quantité", "PU HT (€)", "Total HT (€)"]],
     body: (doc.lignes || []).map(l => {
       if (l.type === "commentaire") return [{ content: l.designation || "", colSpan: 5, styles: { fontStyle: "bold", fillColor: [255, 251, 240], textColor: [90, 74, 26] } }];
+      if (l.type === "option") {
+        const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
+        return [
+          { content: `[OPTION] ${l.designation || "—"}`, styles: { fillColor: [240, 248, 255], textColor: [41, 128, 185], fontStyle: "italic" } },
+          { content: l.unite || "—", styles: { fillColor: [240, 248, 255], halign: "center" } },
+          { content: l.quantite || "—", styles: { fillColor: [240, 248, 255], halign: "right" } },
+          { content: l.pu ? formatMontant(parseFloat(l.pu)) : "—", styles: { fillColor: [240, 248, 255], halign: "right" } },
+          { content: m > 0 ? `${formatMontant(m)} €` : "—", styles: { fillColor: [240, 248, 255], halign: "right", fontStyle: "italic", textColor: [41, 128, 185] } },
+        ];
+      }
       const m = parseFloat(l.quantite || 0) * parseFloat(l.pu || 0);
       return [l.designation || "—", l.unite || "—", l.quantite || "—", l.pu ? formatMontant(parseFloat(l.pu)) : "—", m > 0 ? formatMontant(m) : "—"];
     }),
@@ -446,10 +456,11 @@ function StatCard({ label, value, sub, color = "#E8A838" }) {
     </div>
   );
 }
-function LigneDevis({ ligne, index, onUpdate, onDelete, onInsert, onInsertComment }) {
+function LigneDevis({ ligne, index, onUpdate, onDelete, onInsert, onInsertComment, onInsertOption }) {
   const [showInsert, setShowInsert] = useState(false);
   const m = parseFloat(ligne.quantite || 0) * parseFloat(ligne.pu || 0);
   const isCommentaire = ligne.type === "commentaire";
+  const isOption = ligne.type === "option";
 
   const InsertBar = () => (
     <div
@@ -460,6 +471,7 @@ function LigneDevis({ ligne, index, onUpdate, onDelete, onInsert, onInsertCommen
       <div style={{ flex: 1, height: 1, background: "#E8A838" }} />
       <button onClick={() => onInsert(index)} style={{ background: "#E8A838", border: "none", color: "#000", borderRadius: 10, padding: "1px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ ligne</button>
       <button onClick={() => onInsertComment(index)} style={{ background: "#FFF", border: "1px solid #E8A838", color: "#B8861A", borderRadius: 10, padding: "1px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ explicative</button>
+      <button onClick={() => onInsertOption(index)} style={{ background: "#FFF", border: "1px solid #2980B9", color: "#2980B9", borderRadius: 10, padding: "1px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ option</button>
       <div style={{ flex: 1, height: 1, background: "#E8A838" }} />
     </div>
   );
@@ -475,6 +487,30 @@ function LigneDevis({ ligne, index, onUpdate, onDelete, onInsert, onInsertCommen
             rows={2} spellCheck lang="fr"
             style={{ ...inp, resize: "vertical", minHeight: 48, lineHeight: 1.5, background: "#F8F6F0", fontWeight: 600, fontStyle: "italic", color: "#5A4A1A", border: "none", padding: "4px 6px" }}
           />
+          <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
+        </div>
+        <InsertBar />
+      </div>
+    );
+  }
+
+  if (isOption) {
+    return (
+      <div onMouseEnter={() => setShowInsert(true)} onMouseLeave={() => setShowInsert(false)}>
+        <div style={{ background: "#F0F8FF", border: "1px solid #A8D4F0", borderLeft: "4px solid #2980B9", borderRadius: 8, padding: "10px 12px", marginBottom: 0, display: "grid", gridTemplateColumns: "3fr 100px 90px 90px 110px 32px", gap: 8, alignItems: "start" }}>
+          <div style={{ position: "relative" }}>
+            <span style={{ position: "absolute", top: 6, right: 8, background: "#2980B9", color: "#FFF", fontSize: 9, fontWeight: 700, borderRadius: 10, padding: "1px 7px", letterSpacing: "0.05em" }}>OPTION</span>
+            <textarea placeholder="Description de l'option..." value={ligne.designation} onChange={e => onUpdate(index, { designation: e.target.value })} rows={2} spellCheck lang="fr" style={{ ...inp, resize: "vertical", minHeight: 56, lineHeight: 1.5, background: "#F0F8FF", paddingRight: 70 }} />
+          </div>
+          <select value={ligne.unite} onChange={e => onUpdate(index, { unite: e.target.value })} style={{ ...sel, background: "#F0F8FF" }}>
+            <option value="">Unité</option>
+            {UNITES.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
+          <input type="number" placeholder="Qté" value={ligne.quantite} onChange={e => onUpdate(index, { quantite: e.target.value })} style={{ ...inp, textAlign: "right", background: "#F0F8FF" }} />
+          <input type="number" placeholder="PU HT" value={ligne.pu} onChange={e => onUpdate(index, { pu: e.target.value })} style={{ ...inp, textAlign: "right", background: "#F0F8FF" }} />
+          <div style={{ color: "#2980B9", fontSize: 12, fontWeight: 700, textAlign: "right", paddingTop: 8, fontStyle: "italic" }}>
+            {ligne.quantite && ligne.pu ? `${formatMontant(parseFloat(ligne.quantite) * parseFloat(ligne.pu))} €` : "—"}
+          </div>
           <button onClick={() => onDelete(index)} style={{ background: "transparent", border: "1px solid #DDD", color: "#999", borderRadius: 4, width: 28, height: 28, cursor: "pointer", fontSize: 16, marginTop: 4 }}>×</button>
         </div>
         <InsertBar />
@@ -586,6 +622,7 @@ export default function App() {
   const deleteLigne = useCallback((i) => setDoc(d => ({ ...d, lignes: d.lignes.filter((_, j) => j !== i) })), []);
   const addLigne = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), designation: "", unite: "", quantite: "", pu: "" }] }));
   const addCommentaire = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), type: "commentaire", designation: "", unite: "", quantite: "", pu: "" }] }));
+  const addOption = () => setDoc(d => ({ ...d, lignes: [...d.lignes, { id: Date.now(), type: "option", designation: "", unite: "", quantite: "", pu: "" }] }));
   const insertLigne = (index) => setDoc(d => {
     const lignes = [...d.lignes];
     lignes.splice(index + 1, 0, { id: Date.now(), designation: "", unite: "", quantite: "", pu: "" });
@@ -594,6 +631,11 @@ export default function App() {
   const insertCommentaire = (index) => setDoc(d => {
     const lignes = [...d.lignes];
     lignes.splice(index + 1, 0, { id: Date.now(), type: "commentaire", designation: "", unite: "", quantite: "", pu: "" });
+    return { ...d, lignes };
+  });
+  const insertOption = (index) => setDoc(d => {
+    const lignes = [...d.lignes];
+    lignes.splice(index + 1, 0, { id: Date.now(), type: "option", designation: "", unite: "", quantite: "", pu: "" });
     return { ...d, lignes };
   });
 
@@ -1091,13 +1133,14 @@ Règles: carottage→cml, sciage→m², carbone→ml, démolition→ml, forfait�
             </div>
             {(doc.lignes || []).map((l, i) => (
               <div key={l.id}>
-                <LigneDevis ligne={l} index={i} onUpdate={updateLigne} onDelete={deleteLigne} onInsert={insertLigne} onInsertComment={insertCommentaire} />
+                <LigneDevis ligne={l} index={i} onUpdate={updateLigne} onDelete={deleteLigne} onInsert={insertLigne} onInsertComment={insertCommentaire} onInsertOption={insertOption} />
               </div>
             ))}
             {(doc.lignes || []).length === 0 && <div style={{ textAlign: "center", padding: "28px", color: "#BBB", border: "1px dashed #DDD", borderRadius: 10, marginBottom: 12 }}>Aucune ligne</div>}
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
               <button onClick={addLigne} style={{ ...btn("#999", true), flex: 1 }}>+ Ajouter une ligne</button>
               <button onClick={addCommentaire} style={{ ...btn("#E8A838", true), flex: 1 }}>+ Ligne explicative</button>
+              <button onClick={addOption} style={{ ...btn("#2980B9", true), flex: 1 }}>+ Option</button>
             </div>
 
             {doc.type_doc === "devis" && (
